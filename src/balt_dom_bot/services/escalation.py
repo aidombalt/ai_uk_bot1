@@ -77,6 +77,7 @@ def render_card(
     decision: PipelineDecision,
     proposed_reply: str | None,
     esc_id: int,
+    prior_context: list | None = None,
 ) -> str:
     reason = REASON_LABEL.get(decision.escalation_reason or "", "—")
     name = cls.name or incoming.user_name or "—"
@@ -85,6 +86,23 @@ def render_card(
         if proposed_reply
         else "\n\n💬 Автоответ не сформирован — нужен ручной."
     )
+    # Предшествующие сообщения того же жильца — дают управляющему
+    # полный контекст, даже если первые сообщения были к соседям.
+    context_block = ""
+    if prior_context:
+        lines = []
+        for entry in prior_context[-3:]:
+            txt = (entry.text or "").replace("\n", " ").strip()[:150]
+            if not txt:
+                continue
+            lines.append(f"  • «{txt}»")
+            if entry.bot_reply:
+                bot_short = entry.bot_reply.replace("\n", " ").strip()[:80]
+                lines.append(f"    ↳ Бот ответил: «{bot_short}»")
+        if lines:
+            context_block = (
+                "\n\n📋 До обращения (от того же жильца):\n" + "\n".join(lines)
+            )
     return (
         f"📩 Обращение #{esc_id} | {complex_info.name} | {complex_info.address}\n"
         f"👤 Жилец: {name}\n"
@@ -94,6 +112,7 @@ def render_card(
         f"📝 Суть: {cls.summary}\n"
         f"─────────────────\n"
         f"Оригинал: «{incoming.text}»"
+        f"{context_block}"
         f"{proposed_block}"
     )
 
@@ -122,6 +141,7 @@ class Escalator:
         complex_info: ComplexInfo,
         decision: PipelineDecision,
         proposed_reply: str | None,
+        prior_context: list | None = None,
     ) -> int | None:
         # 1. Создаём pending-запись.
         esc_id = await self._repo.create(
@@ -140,6 +160,7 @@ class Escalator:
             decision=decision,
             proposed_reply=proposed_reply,
             esc_id=esc_id,
+            prior_context=prior_context,
         )
         approve_payload = f"e:a:{esc_id}"
         ignore_payload = f"e:i:{esc_id}"

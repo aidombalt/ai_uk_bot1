@@ -111,12 +111,23 @@ def _format_auto_reply_notification(
     msg: IncomingMessage,
     cls: Classification,
     reply_text: str,
+    prior_context: list | None = None,
 ) -> str:
     """Форматирует уведомление о автоответе для чата «Обращения» (без кнопок)."""
     name = cls.name or msg.user_name or "—"
+    context_block = ""
+    if prior_context:
+        lines = []
+        for entry in prior_context[-2:]:
+            txt = (entry.text or "").replace("\n", " ").strip()[:120]
+            if txt:
+                lines.append(f"  • «{txt}»")
+        if lines:
+            context_block = "📋 До обращения:\n" + "\n".join(lines) + "\n"
     return (
         f"🤖 Автоответ · {complex_info.name}\n"
         f"👤 {name} · 🏷 {cls.theme.value} · 💬 {cls.character.value}\n"
+        f"{context_block}"
         f"📝 «{msg.text}»\n"
         f"─────\n"
         f"✅ {reply_text}"
@@ -762,6 +773,19 @@ class Pipeline:
                 except Exception as exc:
                     log.warning("pipeline.chat_history_append_failed", error=str(exc))
 
+        # Предшествующий контекст от этого жильца — для карточки эскалации и
+        # уведомления об автоответе. Управляющий должен видеть полный тред,
+        # а не только последнее сообщение. Фильтруем по user_id — нам важны
+        # только его сообщения, а не весь общий чат.
+        prior_ctx: list | None = None
+        if self._chat_context is not None and msg.user_id is not None:
+            all_entries = self._chat_context.get_context(
+                chat_id=msg.chat_id, exclude_last=True,
+            )
+            user_entries = [e for e in all_entries if e.user_id == msg.user_id]
+            if user_entries:
+                prior_ctx = user_entries[-3:]
+
         # Эскалация: карточка с кнопками идёт в личку и/или чат «Обращения».
         if decision.escalate:
             await self._escalator.escalate(
@@ -769,6 +793,7 @@ class Pipeline:
                 complex_info=complex_info,
                 decision=decision,
                 proposed_reply=proposed_reply,
+                prior_context=prior_ctx,
             )
             if self._cooldown is not None:
                 self._cooldown.register_escalation(
@@ -778,7 +803,7 @@ class Pipeline:
             # Автоответ был, эскалация не нужна → дублируем как уведомление в
             # чат «Обращения» (для аудита), если включено. В личку НЕ шлём —
             # там должно быть только то, что требует реакции.
-            await self._maybe_notify_chat(complex_info, msg, cls, decision)
+            await self._maybe_notify_chat(complex_info, msg, cls, decision, prior_ctx)
 
         # Авто-модерация: AGGRESSION/PROVOCATION → удаление + страйк.
         # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
@@ -873,6 +898,7 @@ class Pipeline:
         msg: IncomingMessage,
         cls: Classification,
         decision: PipelineDecision,
+        prior_context: list | None = None,
     ) -> None:
         if self._notifier is None:
             return
@@ -883,7 +909,8 @@ class Pipeline:
         if not decision.reply_text:
             return
         text = _format_auto_reply_notification(
-            complex_info=complex_info, msg=msg, cls=cls, reply_text=decision.reply_text,
+            complex_info=complex_info, msg=msg, cls=cls,
+            reply_text=decision.reply_text, prior_context=prior_context,
         )
         await self._notifier.send_notification_to_chat(
             chat_id=complex_info.escalation_chat_id, text=text,
