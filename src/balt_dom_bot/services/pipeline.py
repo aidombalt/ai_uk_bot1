@@ -773,6 +773,14 @@ class Pipeline:
                 except Exception as exc:
                     log.warning("pipeline.chat_history_append_failed", error=str(exc))
 
+        # Вычисляем is_addressed_to_uc заранее — используется и для will_delete
+        # (до эскалации), и для модерации (после эскалации).
+        is_addressed_to_uc = (
+            cls.addressed_to is None
+            or cls.addressed_to == AddressedTo.UC
+            or (cls.character == Character.PROVOCATION and is_incitement)
+        )
+
         # Предыстория этого жильца — только его сообщения, не весь чат.
         # Управляющему не нужен шум от других жильцов; нужна нить конкретного
         # человека чтобы понять контекст обращения. До 5 последних сообщений.
@@ -819,13 +827,6 @@ class Pipeline:
         # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
         # Удаляем если адресовано УК (прямые оскорбления, эмодзи-провокации,
         # подстрекательство) — defined через is_addressed_to_uc.
-        # Если addressed_to=None (LLM не вернул поле) — safety-net: модерируем.
-        is_addressed_to_uc = (
-            cls.addressed_to is None
-            or cls.addressed_to == AddressedTo.UC
-            or (cls.character == Character.PROVOCATION and is_incitement)
-        )
-
         if (
             self._moderator is not None
             and complex_info.auto_delete_aggression
