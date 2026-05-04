@@ -39,6 +39,37 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+# Ключевые слова подстрекательства к смене/сносу УК. Список намеренно
+# узкий, чтобы не ловить бытовые «снести гараж», «гнать мяч» и т.п.
+# Дополнительная защита — требование слова-спутника «УК/управляющ/контору»
+# (см. _is_incitement_text).
+_INCITEMENT_KEYWORDS: tuple[str, ...] = (
+    "подстрекательств",
+    "снести", "сносить",
+    "менять ук", "сменить ук", "поменять ук",
+    "гнать", "гоните",
+    "убрать ук",
+    "избав",         # «избавиться от УК»
+    "другую ук",
+    "к чёрту", "к черту",
+    "на свалку",
+)
+_UK_NEARBY: tuple[str, ...] = ("ук", "управляющ", "контору")
+
+
+def _is_incitement_text(text_lc: str, summary_lc: str) -> bool:
+    """True если текст или summary содержат явные маркеры подстрекательства к смене УК.
+
+    Требует присутствия слова-спутника («ук» / «управляющ» / «контору»)
+    в тексте ИЛИ summary, чтобы не срабатывать на бытовые «снести дерево»,
+    «гнать мяч» и аналогичные. Summary проверяем тоже: LLM часто пишет
+    «подстрекательство к смене УК» — ключевое слово И спутник оба там.
+    """
+    has_keyword = any(k in text_lc or k in summary_lc for k in _INCITEMENT_KEYWORDS)
+    if not has_keyword:
+        return False
+    return any(m in text_lc or m in summary_lc for m in _UK_NEARBY)
+
 
 def _build_complex_info(complex_row: Any, cfg: AppConfig) -> ComplexInfo:
     """Свёртка ComplexRow → ComplexInfo с учётом дефолтов из конфига."""
@@ -420,9 +451,39 @@ class Pipeline:
 
         complex_info = _build_complex_info(complex_row, self._cfg)
 
+        # Определяем ЗАРАНЕЕ: является ли сообщение подстрекательством к смене УК.
+        # Это нужно чтобы корректно обработать случай PROVOCATION + addressed_to=residents:
+        # LLM может классифицировать «менять УК надо» как адресованное жильцам (целевая
+        # аудитория подстрекательства), тогда как по сути это всегда атака на УК.
+        # Используем как текст сообщения, так и summary — LLM часто пишет
+        # «подстрекательство к смене УК» в summary даже когда addressed_to=residents.
+        _msg_text_lc = (msg.text or "").lower()
+        _cls_summary_lc = (cls.summary or "").lower()
+        is_incitement = _is_incitement_text(_msg_text_lc, _cls_summary_lc)
+
         # Уровень 5: ANTI-FLOOD. Проверка ДО classify не нужна — нам нужно
         # знать character (агрессия → продолжаем модерацию). Проверяем после.
         decision = self._decide(cls, msg.received_at)
+
+        # Коррекция для подстрекательства к смене УК, адресованного жильцам.
+        # Стандартный _decide возвращает escalate=False для PROVOCATION+residents —
+        # логика «перепалки жильцов нас не касаются». Но подстрекательство против
+        # УК (содержит «менять УК», «гнать УК» и т.п.) ВСЕГДА должно эскалироваться,
+        # независимо от того, кому формально адресовано сообщение.
+        if (
+            not decision.escalate
+            and cls.character == Character.PROVOCATION
+            and is_incitement
+        ):
+            decision = decision.model_copy(
+                update={"escalate": True, "escalation_reason": "provocation"}
+            )
+            log.info(
+                "pipeline.incitement_force_escalate",
+                chat_id=msg.chat_id, user_id=msg.user_id,
+                addressed_to=cls.addressed_to.value if cls.addressed_to else None,
+                preview=msg.text[:80],
+            )
         log.info(
             "pipeline.decision",
             theme=cls.theme.value,
@@ -713,42 +774,17 @@ class Pipeline:
             await self._maybe_notify_chat(complex_info, msg, cls, decision)
 
         # Авто-модерация: AGGRESSION → удаление + страйк.
-        # ВАЖНО: только если агрессия адресована именно УК (addressed_to=uc).
-        # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота,
-        # бот не модерирует разборки соседей.
-        # Если addressed_to=None (LLM не определил) — действуем как раньше,
-        # это safety-net.
+        # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
+        # Подстрекательство к смене УК (is_incitement) — всегда модерируем,
+        # даже если addressed_to=residents: целевая аудитория провокации —
+        # жильцы, но удар направлен против УК.
+        # Если addressed_to=None (LLM не определил) — safety-net: модерируем.
+        # is_incitement вычислен ранее, до вызова _decide.
         is_addressed_to_uc = (
-            cls.addressed_to is None or cls.addressed_to == AddressedTo.UC
+            cls.addressed_to is None
+            or cls.addressed_to == AddressedTo.UC
+            or (cls.character == Character.PROVOCATION and is_incitement)
         )
-
-        # Маркер «подстрекательство к смене УК»: классификатор кладёт это
-        # явно в summary при срабатывании. Альтернативно — keyword fallback
-        # на случай если LLM не сформулировал так точно (старый промт в БД).
-        summary_lc = (cls.summary or "").lower()
-        text_lc = (msg.text or "").lower()
-        incitement_keywords = (
-            "подстрекательств",
-            "снести", "сносить",
-            "менять ук", "сменить ук", "поменять ук",
-            "гнать", "гоните",
-            "убрать ук",
-            "избав", # «избавиться от ук»
-            "другу" + "ю ук",  # «другую УК»
-            "к чёрту", "к черту",
-            "на свалку",
-        )
-        is_incitement = any(
-            k in summary_lc or k in text_lc
-            for k in incitement_keywords
-        )
-        # Дополнительная проверка: должно быть слово «УК» рядом, чтобы не
-        # триггериться на «снести деревья» или «гнать собак» (не про УК).
-        if is_incitement:
-            has_uk_nearby = any(
-                m in text_lc for m in ("ук", "управляющ", "контору")
-            )
-            is_incitement = is_incitement and has_uk_nearby
 
         if (
             self._moderator is not None
