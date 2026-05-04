@@ -1,0 +1,62 @@
+# Конфигурация AI-бота «Балтийский Дом» для мессенджера Max.
+# Скопируйте файл в config.yaml и заполните под своё окружение.
+# Значения вида ${VAR} подставляются из переменных окружения (.env).
+
+bot:
+  # polling — для разработки и пилота; webhook — для production
+  mode: polling
+  webhook:
+    host: 0.0.0.0
+    port: 8080
+    path: /webhook
+    public_url: https://example.com/webhook  # нужен для subscribe_webhook
+
+yandex_gpt:
+  folder_id: ${YANDEX_FOLDER_ID}
+  api_key: ${YANDEX_API_KEY}
+  # 'yandexgpt' — Pro; 'yandexgpt-lite' — Lite. Версия в model_version.
+  model: yandexgpt
+  model_version: latest
+  classifier_temperature: 0.0
+  responder_temperature: 0.4
+  max_tokens: 300
+  request_timeout_seconds: 10
+  retries: 2
+
+pipeline:
+  # Если уверенность классификатора ниже — эскалация с пометкой.
+  confidence_threshold: 0.6
+  # Часы активности бота (ЛВ; вне — только эскалация без автоответа).
+  active_hours: { from: "08:00", to: "22:00" }
+  # Для типов AGGRESSION/PROVOCATION публичный ответ не отправляется.
+  silent_characters: [AGGRESSION, PROVOCATION]
+  # Темы, эскалируемые принудительно (всегда вместе с автоответом).
+  always_escalate_themes: [EMERGENCY, LEGAL_ORG]
+
+# Маршрутизация: один бот, много чатов ЖК.
+complexes:
+  - id: avrora-1
+    name: ЖК Аврора-1
+    address: ул. Коллонтай, 5 к.1
+    chat_id: -1001111111111        # ID группового чата ЖК в Max
+    manager_chat_id: 22222222      # личный диалог управляющего
+
+  - id: avrora-2
+    name: ЖК Аврора-2
+    address: ул. Коллонтай, 7 к.1
+    chat_id: -1003333333333
+    manager_chat_id: 44444444
+
+# Дежурный — fallback, если для чата не найден manager_chat_id.
+default_manager_chat_id: 99999999
+
+# SQLite-хранилище: эскалации, логи сообщений/ответов, кэш (если backend=sqlite).
+db_path: ./data/bot.sqlite
+
+# Кэш ответов LLM. memory — быстро, теряется при рестарте. sqlite — переживает
+# рестарт, можно осмотреть. null — без кэша (для отладки).
+cache:
+  backend: memory          # memory | sqlite | null
+  ttl_seconds: 3600
+  max_entries: 1000        # только для memory
+  gc_interval_seconds: 600 # только для sqlite

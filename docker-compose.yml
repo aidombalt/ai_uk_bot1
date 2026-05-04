@@ -1,0 +1,27 @@
+services:
+  bot:
+    build: .
+    container_name: balt-dom-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # config.yaml опционален. Если хотите править его на хосте — раскомментируйте,
+      # НО предварительно создайте файл: cp config.example.yaml config.yaml
+      # Иначе Docker создаст директорию вместо файла, и бот не запустится.
+      # - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    environment:
+      LOG_FORMAT: json
+      GUI_HOST: 0.0.0.0
+    ports:
+      - "8000:8000"  # GUI
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3); sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M

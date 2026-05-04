@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}ЖК — Балтийский Дом{% endblock %}
+{% block content %}
+<h3 class="mb-3">Жилые комплексы</h3>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <h6 class="card-title mb-3">Добавить / обновить</h6>
+    <form method="post" action="/complexes/upsert" class="row g-3">
+
+      <div class="col-md-3">
+        <label class="form-label">ID</label>
+        <input class="form-control" name="complex_id" placeholder="avrora-1" required>
+        <small class="text-muted">короткий, латиница</small>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Название</label>
+        <input class="form-control" name="name" placeholder="ЖК Аврора-1" required>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">Адрес</label>
+        <input class="form-control" name="address" placeholder="ул. Коллонтай, 5 к.1" required>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-6">
+        <label class="form-label">chat_id чата ЖК</label>
+        <input class="form-control" type="number" name="chat_id" placeholder="-1234567890" required>
+        <small class="text-muted">ID группового чата с жильцами (число со знаком минус)</small>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">user_id управляющего <span class="text-muted">(опционально)</span></label>
+        <input class="form-control" type="number" name="manager_user_id" placeholder="141525691">
+        <small class="text-muted">Если указать — бот будет игнорировать сообщения управляющего в чате ЖК. Берётся из логов: <code>lifecycle.bot_started user_id=...</code></small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-12">
+        <h6 class="text-muted small text-uppercase mt-2">Каналы уведомлений управляющего</h6>
+        <div class="alert alert-warning small py-2 px-3 mb-2">
+          ⚠️ Заполните <b>хотя бы одно</b> из полей ниже — иначе боту некуда будет
+          пересылать обращения жильцов.
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">📌 chat_id личного диалога управляющего</label>
+        <input class="form-control" type="number" name="manager_chat_id" placeholder="118109162">
+        <small class="text-muted">
+          ⚠️ Это <b>chat_id личного диалога</b> бота с управляющим, <b>не user_id</b>!<br>
+          Управляющий должен сам открыть бота и нажать /start. Тогда в логах появится строка <code>lifecycle.bot_started chat_id=...</code> — это нужное число.
+        </small>
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="escalate_to_manager" id="etm" checked>
+          <label class="form-check-label" for="etm">
+            <b>Эскалации</b> в личку управляющему
+          </label>
+          <div class="text-muted small">Только когда нужно вмешательство (аварии, агрессия, низкая уверенность бота). Чтобы не спамить.</div>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">📋 chat_id чата «Обращения»</label>
+        <input class="form-control" type="number" name="escalation_chat_id" placeholder="-987654321">
+        <small class="text-muted">
+          Отдельный чат для аудита: бот туда дублирует свою работу. Создайте чат, добавьте бота, узнайте chat_id из логов <code>bot_added</code>.
+        </small>
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="escalate_to_chat" id="etc">
+          <label class="form-check-label" for="etc">
+            <b>Лог всех обращений</b> в чат «Обращения»
+          </label>
+          <div class="text-muted small">Туда попадают <b>и автоответы</b> (как лента), <b>и эскалации</b> (с кнопками одобрить/игнор). Полная прозрачность работы бота.</div>
+        </div>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-12">
+        <h6 class="text-muted small text-uppercase mt-2">Авто-модерация <span class="badge bg-warning text-dark">опасно</span></h6>
+        <small class="text-muted">Эти настройки требуют у бота <b>прав администратора</b> в чате ЖК (удаление сообщений + управление участниками). Без прав действия молча провалятся.</small>
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="checkbox" name="auto_delete_aggression" id="ada">
+          <label class="form-check-label" for="ada">
+            <b>Удалять сообщения с матом и оскорблениями</b>
+          </label>
+          <div class="text-muted small">
+            При классификации сообщения как <code>AGGRESSION</code> бот удалит его в чате ЖК. Эскалация управляющему всё равно происходит — он увидит оригинал в карточке и решит, что делать с автором.
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Бан после N страйков агрессии/спама</label>
+        <input class="form-control" type="number" name="strikes_for_ban" min="1" max="10" value="3">
+        <small class="text-muted">
+          Жёсткий счётчик — за <b>мат, оскорбления, спам</b> (наркотики, крипта, реклама). После N-го страйка бот кикает (block=True). По умолчанию 3 — реагируем быстро на серьёзное.
+        </small>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Бан после N страйков троллинга</label>
+        <input class="form-control" type="number" name="trolling_strikes_for_ban" min="2" max="20" value="6">
+        <small class="text-muted">
+          Мягкий счётчик — за <b>повторное дёргание бота</b> («АЛО», «Эй», «@bot ну где ты»). Считается отдельно от агрессии. По умолчанию 6 — даём шанс понять, что бот не отвечает на спам. Управляющий не учитывается. Страйки сбрасываются через 7 дней.
+        </small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">Защита от чрезмерного активного жильца</h6>
+        <small class="text-muted">
+          Когда один человек заваливает чат — бот молча перестаёт отвечать ЕМУ (anti-flood ловит только короткие очереди). Управляющий получает одно уведомление за окно с предложением включить «Болтание» для этого жильца.
+        </small>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Дневная квота ответов (на 1 жильца)</label>
+        <input class="form-control" type="number" name="daily_replies_limit" min="1" max="50" value="5">
+        <small class="text-muted">
+          Сколько раз бот ответит одному жильцу за окно ниже. По умолчанию <b>5</b>. После — silent + 1 уведомление управляющему.
+        </small>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Окно квоты, часов</label>
+        <input class="form-control" type="number" name="daily_window_hours" min="1" max="24" value="6">
+        <small class="text-muted">
+          Размер скользящего окна. По умолчанию <b>6 часов</b>. Окно сбрасывается автоматически после прохождения.
+        </small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">🗨 Режим «Болтания»</h6>
+        <small class="text-muted">
+          Для тревожных или эмоциональных жильцов: бот ведёт мини-диалог с памятью контекста — слушает, уточняет, не спорит, не обещает. <b>НЕ заменяет</b> работу управляющего: после 3-5 реплик бот фиксирует обращение и передаёт. Применяется ТОЛЬКО к жильцам из whitelist (управляется на странице <a href="/chat_whitelist">🗨 Болтание</a>). Spam, мат и провокации к УК продолжают модерироваться нормально.
+        </small>
+      </div>
+
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="chat_mode_enabled" id="chat_mode_enabled">
+          <label class="form-check-label" for="chat_mode_enabled">
+            🗨 Включить режим «Болтания» для этого ЖК
+          </label>
+          <div class="small text-muted">
+            Без галочки — даже добавленные в whitelist жильцы получат стандартный автоответ. Фича работает только когда галочка стоит И жилец в whitelist.
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">Режим работы</h6>
+        <small class="text-muted">
+          Меняет ТОЛЬКО реакцию на обращения жильцов. Модерация (мат/спам) и эскалации работают независимо от этого выбора.
+        </small>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Режим ответов жильцам</label>
+        <select class="form-select" name="reply_mode" onchange="document.getElementById('hm').style.display = this.value === 'holiday' ? '' : 'none'">
+          <option value="normal" selected>🟢 Обычный — отвечать FAQ + ИИ</option>
+          <option value="holiday">🌴 Праздничный — шаблонный автоответ</option>
+          <option value="off">⏸ Выключен — молча принимать только аварии</option>
+        </select>
+        <div class="text-muted small">
+          В режиме <b>OFF</b> бот молчит публично, но эскалирует HIGH_URGENCY и агрессию. В режиме <b>HOLIDAY</b> вместо обычных ответов отправляется шаблон ниже.
+        </div>
+      </div>
+      <div class="col-md-6" id="hm" style="display:none">
+        <label class="form-label">Текст автоответа (режим Праздничный)</label>
+        <textarea class="form-control" name="holiday_message" rows="3" placeholder="Если оставить пустым — будет использован дефолтный текст про особый режим работы."></textarea>
+        <small class="text-muted">Опционально. Например: «Сейчас новогодние праздники, ответим 9 января. По авариям — диспетчер 8 (812) ...»</small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+      <div class="col-md-3">
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="active" id="active" checked>
+          <label class="form-check-label" for="active">Активен</label>
+          <div class="text-muted small">Бот реагирует на сообщения в чате ЖК</div>
+        </div>
+      </div>
+      <div class="col-md-9 d-flex align-items-end">
+        <button class="btn btn-primary w-100">Сохранить</button>
+      </div>
+      <div class="col-12">
+        <small class="text-muted">При совпадении ID запись обновляется.</small>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table mb-0 align-middle">
+      <thead>
+        <tr>
+          <th>ID</th><th>Название</th><th>Адрес</th>
+          <th>chat_id ЖК</th><th>Управляющий</th><th>Чат «Обращения»</th>
+          <th>Уведомления</th><th>Активен</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in items %}
+        <tr>
+          <td><code>{{ c.id }}</code></td>
+          <td>{{ c.name }}</td>
+          <td class="text-muted small">{{ c.address }}</td>
+          <td><code>{{ c.chat_id }}</code></td>
+          <td>
+            {% if c.manager_chat_id %}<code>{{ c.manager_chat_id }}</code>{% else %}<span class="text-muted">—</span>{% endif %}
+            {% if c.manager_user_id %}<br><small class="text-muted">user: {{ c.manager_user_id }}</small>{% endif %}
+          </td>
+          <td>{% if c.escalation_chat_id %}<code>{{ c.escalation_chat_id }}</code>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td>
+            {% if c.escalate_to_manager %}<span class="badge bg-info text-dark" title="Эскалации в личку управляющего">📌 личка</span>{% endif %}
+            {% if c.escalate_to_chat %}<span class="badge bg-secondary" title="Все обращения в чат">📋 лог</span>{% endif %}
+            {% if c.auto_delete_aggression %}<span class="badge bg-warning text-dark" title="Авто-удаление + бан: агрессия после {{ c.strikes_for_ban }}, троллинг после {{ c.trolling_strikes_for_ban or 6 }}">🛡 мод. ({{ c.strikes_for_ban }}/{{ c.trolling_strikes_for_ban or 6 }})</span>{% endif %}
+            {% if c.chat_mode_enabled %}<span class="badge bg-info text-dark" title="Включён режим «Болтания» для жильцов из whitelist">🗨 болтание</span>{% endif %}
+            <span class="badge bg-light text-muted" title="Дневная квота ответов">📊 {{ c.daily_replies_limit or 5 }}/{{ c.daily_window_hours or 6 }}ч</span>
+            {% if c.reply_mode == 'holiday' %}<span class="badge bg-info" title="Режим праздничного автоответа">🌴 holiday</span>
+            {% elif c.reply_mode == 'off' %}<span class="badge bg-secondary" title="Бот не отвечает жильцам, только эскалирует важное">⏸ off</span>{% endif %}
+            {% if not c.escalate_to_manager and not c.escalate_to_chat and not c.auto_delete_aggression %}<span class="text-muted small">только GUI</span>{% endif %}
+          </td>
+          <td>{% if c.active %}<span class="badge bg-success">да</span>{% else %}<span class="badge bg-secondary">нет</span>{% endif %}</td>
+          <td>
+            <form method="post" action="/complexes/{{ c.id }}/delete" onsubmit="return confirm('Удалить ЖК {{ c.id }}?');">
+              <button class="btn btn-sm btn-outline-danger">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="text-muted text-center py-4">Список пуст. Добавьте первый ЖК выше.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

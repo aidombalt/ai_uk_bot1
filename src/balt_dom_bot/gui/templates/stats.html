@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Статистика — Балтийский Дом{% endblock %}
+{% block content %}
+<h3 class="mb-3">Статистика за 30 дней</h3>
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h6 class="text-muted mb-3">Соотношение авто vs эскалации</h6>
+      {% set total = (auto + escalated) or 1 %}
+      <div class="progress" style="height: 30px;">
+        <div class="progress-bar bg-success" style="width: {{ (auto/total*100)|round(1) }}%">
+          Авто: {{ auto }} ({{ (auto/total*100)|round(1) }}%)
+        </div>
+        <div class="progress-bar bg-warning text-dark" style="width: {{ (escalated/total*100)|round(1) }}%">
+          Эскалации: {{ escalated }} ({{ (escalated/total*100)|round(1) }}%)
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card"><div class="card-body">
+      <h6 class="text-muted">По темам</h6>
+      <table class="table table-sm">
+        <tbody>
+          {% for theme, n in by_theme %}
+            <tr><td>{{ theme }}</td><td class="text-end">{{ n }}</td></tr>
+          {% else %}
+            <tr><td colspan="2" class="text-muted">нет данных</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card"><div class="card-body">
+      <h6 class="text-muted">По ЖК</h6>
+      <table class="table table-sm">
+        <tbody>
+          {% for cid, n in by_complex %}
+            <tr><td>{{ cid }}</td><td class="text-end">{{ n }}</td></tr>
+          {% else %}
+            <tr><td colspan="2" class="text-muted">нет данных</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div></div>
+  </div>
+  <div class="col-md-4">
+    <div class="card"><div class="card-body">
+      <h6 class="text-muted">Причины эскалации (за всё время)</h6>
+      <table class="table table-sm">
+        <tbody>
+          {% for reason, n in by_reason %}
+            <tr><td>{{ reason }}</td><td class="text-end">{{ n }}</td></tr>
+          {% else %}
+            <tr><td colspan="2" class="text-muted">нет данных</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

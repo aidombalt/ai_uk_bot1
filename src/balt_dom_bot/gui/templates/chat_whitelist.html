@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">🗨 Болтание</h2>
+  <span class="text-muted small">
+    Жильцы из этого списка получают мини-диалог с ботом (с памятью контекста).
+  </span>
+</div>
+
+<div class="alert alert-info small">
+  <b>Как это работает:</b><br>
+  • Бот ведёт активный разговор: слушает, уточняет детали, не спорит, не обещает сроков.<br>
+  • После 3-5 реплик автоматически фиксирует обращение и передаёт специалистам УК.<br>
+  • Spam, мат и провокации к УК продолжают модерироваться обычным образом.<br>
+  • Перед добавлением в список — убедитесь что в форме ЖК включена галочка <b>«Включить режим Болтания»</b>.
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">➕ Добавить жильца в список</div>
+  <div class="card-body">
+    <form method="post" action="/chat_whitelist/add" class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label">ЖК / chat_id</label>
+        <select class="form-select" name="chat_id" required>
+          <option value="">— выберите ЖК —</option>
+          {% for c in complexes %}
+            <option value="{{ c.chat_id }}">
+              {{ c.name }} ({{ c.chat_id }}){% if not c.chat_mode_enabled %} ⚠️ болтание выключено{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">user_id жильца</label>
+        <input class="form-control" type="number" name="user_id" required>
+        <small class="text-muted">Подсмотреть в логе ленты обращений</small>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Имя</label>
+        <input class="form-control" type="text" name="user_name" placeholder="Иван">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Заметка</label>
+        <input class="form-control" type="text" name="note" placeholder="тревожный, кв 45">
+      </div>
+      <div class="col-12">
+        <button class="btn btn-primary" type="submit">Добавить</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h5>Активные «болтуны» ({{ entries|length }})</h5>
+{% if entries %}
+<div class="table-responsive">
+  <table class="table table-sm table-striped align-middle">
+    <thead>
+      <tr>
+        <th>Добавлен</th>
+        <th>ЖК</th>
+        <th>Жилец</th>
+        <th>Заметка</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      {% set complex = complex_by_chat.get(e.chat_id) %}
+      <tr>
+        <td class="text-nowrap small">{{ e.added_at }}</td>
+        <td>
+          {% if complex %}
+            {{ complex.name }}
+            {% if not complex.chat_mode_enabled %}
+              <br><small class="text-warning">⚠️ болтание для ЖК выключено</small>
+            {% endif %}
+          {% else %}
+            <code class="small">chat: {{ e.chat_id }}</code>
+          {% endif %}
+        </td>
+        <td>
+          {{ e.user_name or '—' }}<br>
+          <code class="small text-muted">user_id: {{ e.user_id }}</code>
+        </td>
+        <td class="small">{{ e.note or '' }}</td>
+        <td class="text-nowrap">
+          <form method="post" action="/chat_whitelist/{{ e.chat_id }}/{{ e.user_id }}/clear_history" class="d-inline"
+                onsubmit="return confirm('Очистить историю переписки с этим жильцом? Контекст будет потерян, бот начнёт диалог заново.');">
+            <button class="btn btn-sm btn-outline-secondary" type="submit" title="Сбросить контекст">🧹</button>
+          </form>
+          <form method="post" action="/chat_whitelist/{{ e.chat_id }}/{{ e.user_id }}/remove" class="d-inline"
+                onsubmit="return confirm('Убрать жильца из списка болтания? История переписки также очистится.');">
+            <button class="btn btn-sm btn-outline-danger" type="submit">🗑 Убрать</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">Пока никого. Добавьте жильца через форму выше — например, когда получите уведомление о превышении квоты.</p>
+{% endif %}
+{% endblock %}

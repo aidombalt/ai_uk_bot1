@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Лента — Балтийский Дом{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Лента активности</h3>
+  <div class="d-flex align-items-center gap-2">
+    <span id="sse-status" class="badge bg-secondary">подключение…</span>
+    <form method="get" class="d-flex gap-2">
+      <select name="complex_id" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">Все ЖК</option>
+        {% for c in complexes %}
+          <option value="{{ c.id }}" {% if filter_complex==c.id %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+</div>
+<div class="card">
+  <div class="card-body" id="feed-list">
+    {% for it in items %}
+      <div class="feed-item">
+        <div class="d-flex justify-content-between">
+          <div>
+            <strong>{{ it.user_name or '—' }}</strong>
+            <span class="text-muted small">· {{ it.complex_id or '—' }} · {{ it.received_at }}</span>
+          </div>
+          {% if it.cls %}
+            <div>
+              <span class="badge badge-theme">{{ it.cls.theme }}</span>
+              <span class="badge bg-warning text-dark">{{ it.cls.urgency }}</span>
+              <span class="badge bg-info text-dark">{{ it.cls.character }}</span>
+            </div>
+          {% endif %}
+        </div>
+        <div class="mt-1">{{ it.user_text }}</div>
+        {% if it.dec and it.dec.escalate %}
+          <div class="small text-warning mt-1">⚠️ Эскалация: {{ it.dec.escalation_reason }}</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function() {
+  const status = document.getElementById('sse-status');
+  const es = new EventSource('/feed/stream');
+  es.onopen = () => { status.className = 'badge bg-success'; status.textContent = 'live'; };
+  es.onerror = () => { status.className = 'badge bg-danger'; status.textContent = 'нет связи'; };
+  es.addEventListener('escalation_resolved', (e) => {
+    const data = JSON.parse(e.data);
+    status.textContent = `обновление: эскалация #${data.id} → ${data.status}`;
+    status.className = 'badge bg-info';
+    setTimeout(() => location.reload(), 800);
+  });
+})();
+</script>
+{% endblock %}

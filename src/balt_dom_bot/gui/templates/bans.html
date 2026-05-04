@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">🚫 Баны</h2>
+  <span class="text-muted small">
+    Кикнутые модерацией пользователи. Кнопка «↩️ Разбанить» сбрасывает страйки и возвращает доступ.
+  </span>
+</div>
+
+<div class="alert alert-warning small">
+  <b>Важно:</b> Max API не всегда даёт боту разблокировать ранее заблокированного пользователя.
+  Если разбан в API не сработает, запись в БД всё равно обновится — пользователь сможет вернуться сам по приглашению или ссылке.
+  Проверьте в логах: <code>moderation.unban_*</code>
+</div>
+
+<h5>🟥 Активные баны ({{ active_bans|length }})</h5>
+{% if active_bans %}
+<div class="table-responsive">
+  <table class="table table-sm table-striped">
+    <thead>
+      <tr>
+        <th>Когда</th>
+        <th>ЖК</th>
+        <th>Пользователь</th>
+        <th>Причина</th>
+        <th>Страйков</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in active_bans %}
+      <tr>
+        <td class="text-nowrap small">{{ b.banned_at }}</td>
+        <td>{{ complex_names.get(b.complex_id, b.complex_id or "—") }}</td>
+        <td>
+          <span title="user_id={{ b.user_id }}">{{ b.user_name or '—' }}</span><br>
+          <code class="small text-muted">user_id: {{ b.user_id }}</code>
+        </td>
+        <td>
+          {% if b.reason == 'aggression' %}
+            <span class="badge bg-danger">🚫 агрессия/спам</span>
+          {% elif b.reason == 'trolling' %}
+            <span class="badge bg-warning text-dark">🤖 троллинг</span>
+          {% else %}
+            <span class="badge bg-secondary">{{ b.reason }}</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          🔥 {{ b.aggression_count }} · 🤖 {{ b.trolling_count }}
+        </td>
+        <td>
+          <form method="post" action="/bans/{{ b.id }}/unban"
+                onsubmit="return confirm('Разбанить пользователя {{ b.user_name or b.user_id }}? Бот попробует вернуть его в чат и сбросит страйки.');">
+            <button class="btn btn-sm btn-outline-success" type="submit">↩️ Разбанить</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-muted">Активных банов нет 🎉</p>
+{% endif %}
+
+{% if history %}
+<hr class="my-4">
+<h5 class="text-muted">История разбанов ({{ history|length }})</h5>
+<div class="table-responsive">
+  <table class="table table-sm small">
+    <thead>
+      <tr>
+        <th>Бан</th>
+        <th>Разбан</th>
+        <th>ЖК</th>
+        <th>Пользователь</th>
+        <th>Причина</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in history %}
+      <tr class="text-muted">
+        <td>{{ b.banned_at }}</td>
+        <td>{{ b.unbanned_at or '—' }}</td>
+        <td>{{ complex_names.get(b.complex_id, b.complex_id or "—") }}</td>
+        <td>{{ b.user_name or '—' }} <code>({{ b.user_id }})</code></td>
+        <td>{{ b.reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

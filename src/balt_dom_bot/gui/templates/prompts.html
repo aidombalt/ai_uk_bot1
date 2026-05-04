@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Промты — Балтийский Дом{% endblock %}
+{% block content %}
+<h3 class="mb-3">Системные промты</h3>
+<div class="alert alert-info small">
+  Изменения подхватываются на лету (TTL-кэш ~30 секунд). Имя записи определяет, какой компонент её использует:
+  <code>classifier_system</code> — классификатор, <code>responder_system</code> — генератор ответов.
+</div>
+{% for p in items %}
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-baseline mb-2">
+      <h5 class="card-title"><code>{{ p.name }}</code></h5>
+      <small class="text-muted">обновлён {{ p.updated_at }}{% if p.updated_by %} · by user #{{ p.updated_by }}{% endif %}</small>
+    </div>
+    <form method="post" action="/prompts/{{ p.name }}">
+      <textarea name="content" class="form-control prompt-editor mb-2">{{ p.content }}</textarea>
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-sm" type="submit">Сохранить</button>
+      </div>
+    </form>
+    <form method="post" action="/prompts/{{ p.name }}/reset" class="mt-2"
+          onsubmit="return confirm('Сбросить промт к дефолту из кода? Текущий текст будет потерян.');">
+      <button class="btn btn-outline-secondary btn-sm" type="submit">↺ Сбросить к дефолту</button>
+      <small class="text-muted ms-2">после обновлений бота — обновляет промт до новой версии из кода</small>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
