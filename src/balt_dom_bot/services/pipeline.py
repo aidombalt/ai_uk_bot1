@@ -780,13 +780,11 @@ class Pipeline:
             # там должно быть только то, что требует реакции.
             await self._maybe_notify_chat(complex_info, msg, cls, decision)
 
-        # Авто-модерация: AGGRESSION → удаление + страйк.
+        # Авто-модерация: AGGRESSION/PROVOCATION → удаление + страйк.
         # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
-        # Подстрекательство к смене УК (is_incitement) — всегда модерируем,
-        # даже если addressed_to=residents: целевая аудитория провокации —
-        # жильцы, но удар направлен против УК.
-        # Если addressed_to=None (LLM не определил) — safety-net: модерируем.
-        # is_incitement вычислен ранее, до вызова _decide.
+        # Удаляем если адресовано УК (прямые оскорбления, эмодзи-провокации,
+        # подстрекательство) — defined через is_addressed_to_uc.
+        # Если addressed_to=None (LLM не вернул поле) — safety-net: модерируем.
         is_addressed_to_uc = (
             cls.addressed_to is None
             or cls.addressed_to == AddressedTo.UC
@@ -797,13 +795,7 @@ class Pipeline:
             self._moderator is not None
             and complex_info.auto_delete_aggression
             and is_addressed_to_uc
-            and (
-                cls.character == Character.AGGRESSION
-                or (
-                    cls.character == Character.PROVOCATION
-                    and is_incitement
-                )
-            )
+            and cls.character in (Character.AGGRESSION, Character.PROVOCATION)
         ):
             try:
                 # Для PROVOCATION-подстрекательства используем тот же
