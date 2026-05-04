@@ -370,6 +370,18 @@ class LlmClassifier:
         if not data.get("name") and author_name:
             data["name"] = author_name
 
+        # LLM иногда путает поля и пишет character-значение в theme
+        # (например "PROVOCATION" или "AGGRESSION" вместо темы).
+        # Спасаем классификацию: сбрасываем theme в OTHER, character остаётся.
+        _valid_themes = {t.value for t in Theme}
+        if data.get("theme") not in _valid_themes:
+            log.warning(
+                "classifier.theme_salvaged",
+                bad_theme=data.get("theme"),
+                character=data.get("character"),
+            )
+            data["theme"] = Theme.OTHER.value
+
         try:
             cls = Classification.model_validate(data)
         except ValidationError as exc:
