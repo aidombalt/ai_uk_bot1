@@ -118,12 +118,12 @@ def _format_auto_reply_notification(
     context_block = ""
     if prior_context:
         lines = []
-        for entry in prior_context[-2:]:
+        for entry in prior_context[-3:]:
             txt = (entry.text or "").replace("\n", " ").strip()[:120]
             if txt:
                 lines.append(f"  • «{txt}»")
         if lines:
-            context_block = "📋 До обращения:\n" + "\n".join(lines) + "\n"
+            context_block = "📋 Предыстория жильца:\n" + "\n".join(lines) + "\n"
     return (
         f"🤖 Автоответ · {complex_info.name}\n"
         f"👤 {name} · 🏷 {cls.theme.value} · 💬 {cls.character.value}\n"
@@ -773,10 +773,9 @@ class Pipeline:
                 except Exception as exc:
                     log.warning("pipeline.chat_history_append_failed", error=str(exc))
 
-        # Предшествующий контекст от этого жильца — для карточки эскалации и
-        # уведомления об автоответе. Управляющий должен видеть полный тред,
-        # а не только последнее сообщение. Фильтруем по user_id — нам важны
-        # только его сообщения, а не весь общий чат.
+        # Предыстория этого жильца — только его сообщения, не весь чат.
+        # Управляющему не нужен шум от других жильцов; нужна нить конкретного
+        # человека чтобы понять контекст обращения. До 5 последних сообщений.
         prior_ctx: list | None = None
         if self._chat_context is not None and msg.user_id is not None:
             all_entries = self._chat_context.get_context(
@@ -784,7 +783,17 @@ class Pipeline:
             )
             user_entries = [e for e in all_entries if e.user_id == msg.user_id]
             if user_entries:
-                prior_ctx = user_entries[-3:]
+                prior_ctx = user_entries[-5:]
+
+        # Флаг: будет ли сообщение автоматически удалено модератором.
+        # Вычисляем здесь (до эскалации) — условие детерминировано теми же
+        # переменными, что используются ниже в блоке модерации.
+        will_delete = (
+            self._moderator is not None
+            and complex_info.auto_delete_aggression
+            and is_addressed_to_uc
+            and cls.character in (Character.AGGRESSION, Character.PROVOCATION)
+        )
 
         # Эскалация: карточка с кнопками идёт в личку и/или чат «Обращения».
         if decision.escalate:
@@ -794,6 +803,7 @@ class Pipeline:
                 decision=decision,
                 proposed_reply=proposed_reply,
                 prior_context=prior_ctx,
+                auto_deleted=will_delete,
             )
             if self._cooldown is not None:
                 self._cooldown.register_escalation(

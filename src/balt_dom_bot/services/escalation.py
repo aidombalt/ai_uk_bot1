@@ -78,31 +78,39 @@ def render_card(
     proposed_reply: str | None,
     esc_id: int,
     prior_context: list | None = None,
+    auto_deleted: bool = False,
 ) -> str:
     reason = REASON_LABEL.get(decision.escalation_reason or "", "—")
     name = cls.name or incoming.user_name or "—"
+
+    moderation_line = (
+        "\n🗑 Сообщение автоматически удалено, жильцу засчитан страйк."
+        if auto_deleted else ""
+    )
+
     proposed_block = (
         f"\n\n💬 Предложенный автоответ:\n«{proposed_reply}»"
         if proposed_reply
         else "\n\n💬 Автоответ не сформирован — нужен ручной."
     )
-    # Предшествующие сообщения того же жильца — дают управляющему
-    # полный контекст, даже если первые сообщения были к соседям.
+
+    # Предыстория жильца: его предшествующие сообщения в хронологическом
+    # порядке. Только от этого пользователя — управляющему не нужен весь
+    # чат, только нить именно этого жильца чтобы понять контекст обращения.
     context_block = ""
     if prior_context:
         lines = []
-        for entry in prior_context[-3:]:
+        for entry in prior_context:
             txt = (entry.text or "").replace("\n", " ").strip()[:150]
             if not txt:
                 continue
             lines.append(f"  • «{txt}»")
             if entry.bot_reply:
-                bot_short = entry.bot_reply.replace("\n", " ").strip()[:80]
+                bot_short = entry.bot_reply.replace("\n", " ").strip()[:100]
                 lines.append(f"    ↳ Бот ответил: «{bot_short}»")
         if lines:
-            context_block = (
-                "\n\n📋 До обращения (от того же жильца):\n" + "\n".join(lines)
-            )
+            context_block = "\n\n📋 Предыстория (предшествующие сообщения жильца):\n" + "\n".join(lines)
+
     return (
         f"📩 Обращение #{esc_id} | {complex_info.name} | {complex_info.address}\n"
         f"👤 Жилец: {name}\n"
@@ -112,6 +120,7 @@ def render_card(
         f"📝 Суть: {cls.summary}\n"
         f"─────────────────\n"
         f"Оригинал: «{incoming.text}»"
+        f"{moderation_line}"
         f"{context_block}"
         f"{proposed_block}"
     )
@@ -142,6 +151,7 @@ class Escalator:
         decision: PipelineDecision,
         proposed_reply: str | None,
         prior_context: list | None = None,
+        auto_deleted: bool = False,
     ) -> int | None:
         # 1. Создаём pending-запись.
         esc_id = await self._repo.create(
@@ -161,6 +171,7 @@ class Escalator:
             proposed_reply=proposed_reply,
             esc_id=esc_id,
             prior_context=prior_context,
+            auto_deleted=auto_deleted,
         )
         approve_payload = f"e:a:{esc_id}"
         ignore_payload = f"e:i:{esc_id}"

@@ -148,7 +148,7 @@ class _EscalationTracker:
     def __init__(self) -> None:
         self.escalated: list[tuple[str, str]] = []  # (reason, text)
 
-    async def escalate(self, *, incoming: Any, complex_info: Any, decision: Any, proposed_reply: Any, prior_context: Any = None) -> None:
+    async def escalate(self, *, incoming: Any, complex_info: Any, decision: Any, proposed_reply: Any, prior_context: Any = None, auto_deleted: bool = False) -> None:
         self.escalated.append((decision.escalation_reason or "", incoming.text))
 
 
