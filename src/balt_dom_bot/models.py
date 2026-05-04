@@ -127,6 +127,13 @@ class IncomingMessage(BaseModel):
     # тегает бота, но классификатор считает обращение off-topic — это
     # признак намеренного троллинга, и со 2-го раза подряд мы удаляем.
     bot_mentioned: bool = False
+    # Контекст реплая / форварда (из Max API msg.link).
+    # reply_to_bot=True означает что жилец ответил именно на сообщение бота —
+    # критично для addressed_to: агрессия в ответ боту = обращение к УК.
+    reply_to_bot: bool = False
+    linked_message_text: str | None = None   # текст цитируемого сообщения
+    linked_message_type: str | None = None   # "reply" или "forward"
+    linked_sender_name: str | None = None    # имя автора цитируемого сообщения
 
 
 class PipelineDecision(BaseModel):

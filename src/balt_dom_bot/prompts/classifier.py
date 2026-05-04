@@ -183,6 +183,22 @@ CLASSIFIER_SYSTEM_PROMPT = """\
 - «✊» → residents (поддержка)
 - «🙏» → residents (благодарность)
 
+📌 ОТВЕТ НА СООБЩЕНИЕ БОТА — ОСОБОЕ ПРАВИЛО:
+Если в user-сообщении есть пометка [ВАЖНО: жилец ОТВЕЧАЕТ НА СООБЩЕНИЕ БОТА: «...»], это означает что жилец дал ответную реакцию именно на ответ бота (= ответ УК). Применяй правила:
+
+1. Любая негативная эмоция / оскорбление в ответ на сообщение бота → addressed_to=uc (это атака на УК, не на соседей).
+   Примеры:
+   - «да ну вас» → residents обычно, но в ответ боту → uc (COMPLAINT_MILD)
+   - «заткнись» в ответ боту → uc (AGGRESSION)
+   - «бесполезный» в ответ боту → uc (COMPLAINT_MILD)
+   - мат в ответ боту → uc (AGGRESSION)
+
+2. Нейтральная реплика в ответ боту (уточнение, благодарность) → всё равно uc, если содержит вопрос/просьбу к УК:
+   - «а когда именно?» → uc (INFO_REQUEST)
+   - «спасибо» → residents (нет новой просьбы)
+
+3. НЕ меняй character из-за того что это ответ боту — определяй по тексту. Меняй только addressed_to.
+
 📌 КОНТЕКСТ ЧАТА — ВАЖНО:
 Если в user-сообщении ниже передан КОНТЕКСТ ЧАТА (последние сообщения), используй его чтобы:
 
@@ -209,23 +225,54 @@ def build_user_message(
     text: str,
     author_name: str | None,
     chat_context: list | None = None,
+    *,
+    reply_to_bot: bool = False,
+    linked_text: str | None = None,
+    linked_sender_name: str | None = None,
+    linked_type: str | None = None,
 ) -> str:
     author_line = (
         f"Имя автора (из метаданных чата): {author_name}"
         if author_name else "Имя автора: неизвестно"
     )
 
+    # Блок реплая: жилец ответил на конкретное сообщение (бота или другого жильца).
+    # Это критично для addressed_to — реплай в адрес бота = addressed_to=uc.
+    reply_block = ""
+    if reply_to_bot and linked_text:
+        bot_q = linked_text.replace("\n", " ").strip()[:200]
+        reply_block = (
+            f"\n\n[ВАЖНО: жилец ОТВЕЧАЕТ НА СООБЩЕНИЕ БОТА: «{bot_q}»]\n"
+            f"Это прямой ответ на ответ бота. "
+            f"Если тональность отрицательная или агрессивная — это обращение к УК (addressed_to=uc)."
+        )
+    elif linked_text and linked_type in ("reply", "REPLY"):
+        who = linked_sender_name or "другой участник"
+        lq = linked_text.replace("\n", " ").strip()[:200]
+        reply_block = f"\n\n[Жилец отвечает на сообщение «{who}»: «{lq}»]"
+    elif linked_text and linked_type in ("forward", "FORWARD"):
+        who = linked_sender_name or "кто-то"
+        lq = linked_text.replace("\n", " ").strip()[:200]
+        reply_block = f"\n\n[Жилец пересылает от «{who}»: «{lq}»]"
+
     # Контекст чата — что обсуждалось последние минуты, чтобы LLM могла
     # отличить продолжение треда от нового независимого сообщения.
     context_block = ""
     if chat_context:
         lines = []
-        for entry in chat_context[-6:]:  # максимум 6 последних
+        for entry in chat_context[-8:]:  # максимум 8 последних
             who = entry.user_name or f"user#{entry.user_id}" if entry.user_id else "—"
             txt = (entry.text or "").replace("\n", " ").strip()[:200]
             if not txt:
                 continue
-            lines.append(f"- {who}: «{txt}»")
+            prefix = "[→ боту] " if getattr(entry, "reply_to_bot", False) else ""
+            linked = getattr(entry, "linked_text", None)
+            if linked:
+                l_who = getattr(entry, "linked_sender_name", None) or "…"
+                lshort = linked.replace("\n", " ").strip()[:80]
+                lines.append(f"- {who}: {prefix}↩ «{l_who}: {lshort}» → «{txt}»")
+            else:
+                lines.append(f"- {who}: {prefix}«{txt}»")
             if entry.bot_reply:
                 bot_short = entry.bot_reply.replace("\n", " ").strip()[:120]
                 lines.append(f"  ↳ Бот ответил: «{bot_short}»")
@@ -239,7 +286,7 @@ def build_user_message(
             )
 
     return (
-        f"{author_line}{context_block}\n\n"
+        f"{author_line}{reply_block}{context_block}\n\n"
         f"Текущее сообщение для классификации:\n«{text}»\n\n"
         f"Верни классификацию."
     )

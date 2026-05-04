@@ -33,6 +33,10 @@ class Classifier(Protocol):
         text: str,
         author_name: str | None = None,
         chat_context: list | None = None,
+        reply_to_bot: bool = False,
+        linked_text: str | None = None,
+        linked_sender_name: str | None = None,
+        linked_type: str | None = None,
     ) -> Classification: ...
 
 
@@ -317,6 +321,10 @@ class LlmClassifier:
         text: str,
         author_name: str | None = None,
         chat_context: list | None = None,
+        reply_to_bot: bool = False,
+        linked_text: str | None = None,
+        linked_sender_name: str | None = None,
+        linked_type: str | None = None,
     ) -> Classification:
         if self._prompts is not None:
             system = await self._prompts.get(self.PROMPT_NAME, CLASSIFIER_SYSTEM_PROMPT)
@@ -328,7 +336,13 @@ class LlmClassifier:
                     GptMessage(role="system", text=system),
                     GptMessage(
                         role="user",
-                        text=build_user_message(text, author_name, chat_context),
+                        text=build_user_message(
+                            text, author_name, chat_context,
+                            reply_to_bot=reply_to_bot,
+                            linked_text=linked_text,
+                            linked_sender_name=linked_sender_name,
+                            linked_type=linked_type,
+                        ),
                     ),
                 ],
                 temperature=self._cfg.classifier_temperature,
@@ -382,9 +396,15 @@ class SafetyNetClassifier:
         text: str,
         author_name: str | None = None,
         chat_context: list | None = None,
+        reply_to_bot: bool = False,
+        linked_text: str | None = None,
+        linked_sender_name: str | None = None,
+        linked_type: str | None = None,
     ) -> Classification:
         result = await self._primary.classify(
             text=text, author_name=author_name, chat_context=chat_context,
+            reply_to_bot=reply_to_bot, linked_text=linked_text,
+            linked_sender_name=linked_sender_name, linked_type=linked_type,
         )
         forced = _detect_aggression_marker(text.lower())
         if forced is None or result.character in {Character.AGGRESSION, Character.PROVOCATION}:

@@ -314,6 +314,10 @@ class Pipeline:
             text=msg.text,
             author_name=msg.user_name,
             chat_context=chat_context_entries,
+            reply_to_bot=msg.reply_to_bot,
+            linked_text=msg.linked_message_text,
+            linked_sender_name=msg.linked_sender_name,
+            linked_type=msg.linked_message_type,
         )
 
         # Записываем ТЕКУЩЕЕ сообщение в буфер контекста чата ПОСЛЕ того
@@ -326,6 +330,9 @@ class Pipeline:
                 user_id=msg.user_id,
                 user_name=msg.user_name,
                 text=msg.text,
+                reply_to_bot=msg.reply_to_bot,
+                linked_text=msg.linked_message_text,
+                linked_sender_name=msg.linked_sender_name,
             )
 
         # Проверяем заранее: жилец в whitelist для болтания?

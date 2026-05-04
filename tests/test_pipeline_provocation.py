@@ -112,7 +112,14 @@ class _FakeClassifier:
     def __init__(self, cls: Classification) -> None:
         self._cls = cls
 
-    async def classify(self, *, text: str, author_name: str | None = None, chat_context: list | None = None) -> Classification:
+    async def classify(
+        self, *, text: str, author_name: str | None = None,
+        chat_context: list | None = None,
+        reply_to_bot: bool = False,
+        linked_text: str | None = None,
+        linked_sender_name: str | None = None,
+        linked_type: str | None = None,
+    ) -> Classification:
         return self._cls
 
 
@@ -290,7 +297,12 @@ async def test_context_passed_to_classifier() -> None:
 
     class _TrackingClassifier:
         async def classify(
-            self, *, text: str, author_name: str | None = None, chat_context: list | None = None
+            self, *, text: str, author_name: str | None = None,
+            chat_context: list | None = None,
+            reply_to_bot: bool = False,
+            linked_text: str | None = None,
+            linked_sender_name: str | None = None,
+            linked_type: str | None = None,
         ) -> Classification:
             received_contexts.append(chat_context)
             return _make_cls(character=Character.QUESTION, addressed_to=AddressedTo.UC)

@@ -34,13 +34,16 @@ class ChatContextEntry:
     text: str
     bot_reply: str | None  # если бот ответил на это сообщение — какой текст
     received_at: float
+    reply_to_bot: bool = False          # True если жилец ответил на сообщение бота
+    linked_text: str | None = None     # текст цитируемого/пересылаемого сообщения
+    linked_sender_name: str | None = None  # имя автора цитируемого сообщения
 
 
 class ChatContextManager:
     """In-memory буфер последних сообщений по каждому чату."""
 
-    MAX_PER_CHAT = 8
-    MAX_AGE_SECONDS = 10 * 60  # 10 минут
+    MAX_PER_CHAT = 15
+    MAX_AGE_SECONDS = 20 * 60  # 20 минут
 
     def __init__(self):
         self._buffers: dict[int, deque[ChatContextEntry]] = {}
@@ -53,6 +56,9 @@ class ChatContextManager:
         user_name: str | None,
         text: str,
         bot_reply: str | None = None,
+        reply_to_bot: bool = False,
+        linked_text: str | None = None,
+        linked_sender_name: str | None = None,
     ) -> None:
         """Добавляет сообщение жильца (и опционально ответ бота на него)."""
         buf = self._buffers.setdefault(
@@ -63,6 +69,9 @@ class ChatContextManager:
             text=text[:300],  # обрезаем длинные сообщения чтобы не раздуть промпт
             bot_reply=bot_reply[:200] if bot_reply else None,
             received_at=time.time(),
+            reply_to_bot=reply_to_bot,
+            linked_text=linked_text[:200] if linked_text else None,
+            linked_sender_name=linked_sender_name,
         ))
 
     def attach_bot_reply(
@@ -84,6 +93,9 @@ class ChatContextManager:
                     user_id=entry.user_id, user_name=entry.user_name,
                     text=entry.text, bot_reply=reply_text[:200],
                     received_at=entry.received_at,
+                    reply_to_bot=entry.reply_to_bot,
+                    linked_text=entry.linked_text,
+                    linked_sender_name=entry.linked_sender_name,
                 )
                 return
 

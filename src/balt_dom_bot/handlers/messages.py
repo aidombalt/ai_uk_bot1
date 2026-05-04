@@ -144,6 +144,30 @@ def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
             # сообщении, но обычная обработка пройдёт нормально.
             bot_mentioned = False
 
+        # Извлекаем контекст реплая/форварда из Max API (msg.link).
+        # reply_to_bot=True если жилец ответил именно на сообщение бота —
+        # это ключевой сигнал для LLM: агрессия в ответ боту = addressed_to=uc.
+        linked_message_text: str | None = None
+        linked_message_type: str | None = None
+        reply_to_bot: bool = False
+        linked_sender_name: str | None = None
+        try:
+            link = getattr(msg, "link", None)
+            if link is not None:
+                link_type = getattr(link, "type", None)
+                linked_message_type = str(link_type) if link_type else None
+                link_msg = getattr(link, "message", None)
+                link_sender = getattr(link, "sender", None)
+                if link_msg:
+                    linked_message_text = getattr(link_msg, "text", None)
+                if link_sender:
+                    linked_sender_name = getattr(link_sender, "name", None)
+                    link_sender_id = getattr(link_sender, "user_id", None)
+                    if bot_user_id and link_sender_id == bot_user_id:
+                        reply_to_bot = True
+        except Exception:
+            pass
+
         incoming = IncomingMessage(
             chat_id=int(chat_id),
             message_id=str(getattr(body, "mid", "") or getattr(msg, "mid", "")),
@@ -152,6 +176,10 @@ def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
             text=text,
             received_at=received_at,
             bot_mentioned=bot_mentioned,
+            reply_to_bot=reply_to_bot,
+            linked_message_text=linked_message_text,
+            linked_message_type=linked_message_type,
+            linked_sender_name=linked_sender_name,
         )
 
         log.info(
