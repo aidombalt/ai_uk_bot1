@@ -88,6 +88,25 @@ _PROVOCATION_MARKERS = (
     "вас всех уволить", "разогнать вас", "выгнать всех",
 )
 
+# Посессив «Вашу/Ваш/Вашего» + личная вещь/поведение другого жильца.
+# Когда жилец пишет «Вашу музыку», «Вашего пса» — он обращается к ВЛАДЕЛЬЦУ
+# этой вещи (соседу), а не к УК. УК не может выключить чужую музыку.
+# Если LLM ставит addressed_to=UC, но этот паттерн сработал → override → RESIDENTS.
+_RESIDENT_POSSESSIVE_RE = re.compile(
+    r"\bваш(?:у|а|е|его|ей|и)?\s+"
+    r"(?:музык[ауи]?|земфир[ау]?|трек[иа]?|плейлист|мелодий?|шум[уа]?|звук[иа]?"
+    r"|пс[ауе]|собак[ауи]?|кошк[ауи]?|кот[ауе]?|котяр[ауе]?"
+    r"|машин[ауы]?|тачк[ауи]?|автомобил[яь]?|мотоцикл\w*|велосипед\w*"
+    r"|мусор\w*|хлам\w*|барахл\w*|окурк[иа]?|сигарет\w*)",
+    re.IGNORECASE,
+)
+
+
+def _detect_resident_addressed(text_lc: str) -> bool:
+    """True если посессив «Вашу/Ваш» + личная вещь жильца → обращение к соседу."""
+    return bool(_RESIDENT_POSSESSIVE_RE.search(text_lc))
+
+
 _EMERGENCY = ("потоп", "затопил", "затопле", "горит", "пожар", "авари", "прорыв", "затопл")
 _TECH = ("лифт", "не работает", "сломал", "сломан", "сигнализаци", "домофон")
 _IMPROVEMENT = ("уборк", "грязно", "мусор", "газон", "детск", "площадк", "озеленен")
@@ -408,7 +427,13 @@ class LlmClassifier:
 
 
 class SafetyNetClassifier:
-    """Поднимает character до AGGRESSION/PROVOCATION при наличии жёстких маркеров."""
+    """Детерминированные override поверх LLM-классификации.
+
+    1. character override: жёсткие маркеры (мат, угрозы) → AGGRESSION/PROVOCATION.
+    2. addressed_to override: посессив «Вашу/Ваш» + личная вещь соседа → RESIDENTS.
+       LLM часто ошибается, принимая «выключите Вашу музыку» за обращение к УК,
+       хотя УК физически не может выключить чужую музыку.
+    """
 
     def __init__(self, primary: Classifier):
         self._primary = primary
@@ -428,14 +453,27 @@ class SafetyNetClassifier:
             reply_to_bot=reply_to_bot, linked_text=linked_text,
             linked_sender_name=linked_sender_name, linked_type=linked_type,
         )
-        forced = _detect_aggression_marker(text.lower())
-        if forced is None or result.character in {Character.AGGRESSION, Character.PROVOCATION}:
-            return result
-        log.warning(
-            "classifier.safety_net_override",
-            from_=result.character.value,
-            to=forced.value,
-        )
-        return result.model_copy(
-            update={"character": forced, "confidence": max(result.confidence, 0.95)}
-        )
+        text_lc = text.lower()
+
+        # Override 1: character — жёсткие маркеры агрессии/провокации.
+        forced = _detect_aggression_marker(text_lc)
+        if forced is not None and result.character not in {Character.AGGRESSION, Character.PROVOCATION}:
+            log.warning(
+                "classifier.safety_net_override",
+                from_=result.character.value,
+                to=forced.value,
+            )
+            result = result.model_copy(
+                update={"character": forced, "confidence": max(result.confidence, 0.95)}
+            )
+
+        # Override 2: addressed_to — посессив «Вашу/Ваш» + личная вещь жильца.
+        # «Выключите Вашу музыку/Земфиру/пса» = к соседу, не к УК.
+        if result.addressed_to == AddressedTo.UC and _detect_resident_addressed(text_lc):
+            log.info(
+                "classifier.resident_address_override",
+                preview=text[:80],
+            )
+            result = result.model_copy(update={"addressed_to": AddressedTo.RESIDENTS})
+
+        return result
