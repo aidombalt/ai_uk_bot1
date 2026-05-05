@@ -17,6 +17,7 @@ from balt_dom_bot.models import (
     PipelineDecision,
     ReplyMode,
     Theme,
+    Urgency,
 )
 from balt_dom_bot.services.classifier import Classifier, is_off_topic
 from balt_dom_bot.services import spam_detector
@@ -96,6 +97,55 @@ def _build_complex_info(complex_row: Any, cfg: AppConfig) -> ComplexInfo:
         daily_window_hours=getattr(complex_row, "daily_window_hours", 6),
         chat_mode_enabled=bool(getattr(complex_row, "chat_mode_enabled", False)),
     )
+
+
+def _should_auto_engage(cls: Classification) -> bool:
+    """Проверяет, стоит ли автоматически инициировать chat-mode для нелистиста.
+
+    True только для жёстких жалоб, адресованных УК (или неопределённых —
+    benefit of the doubt). Высокая срочность и агрессия исключены: они идут
+    в эскалацию, не в диалог.
+    """
+    if cls.addressed_to not in (None, AddressedTo.UC):
+        return False
+    if cls.character in (Character.AGGRESSION, Character.PROVOCATION):
+        return False
+    if cls.urgency == Urgency.HIGH or cls.theme == Theme.EMERGENCY:
+        return False
+    return cls.character == Character.COMPLAINT_STRONG
+
+
+def _format_chat_mode_summary(
+    *,
+    msg: IncomingMessage,
+    complex_info: ComplexInfo,
+    history: list,
+    bot_reply: str,
+) -> str:
+    """Краткое резюме диалога для чата «Обращения».
+
+    Отправляется один раз при достижении порога обменов — вместо
+    мусорных per-message уведомлений.
+    """
+    name = msg.user_name or f"id:{msg.user_id}"
+    exchange_count = (len(history) + 2) // 2
+
+    def _t(text: str, n: int = 150) -> str:
+        return text[:n] + "…" if len(text) > n else text
+
+    lines = [
+        f"💬 Диалог с жильцом · {complex_info.name}",
+        f"👤 {name}" + (f" (id: {msg.user_id})" if msg.user_id else ""),
+        f"📊 Обменов: {exchange_count}",
+        "─────",
+    ]
+    for entry in (history[-4:] if len(history) > 4 else history):
+        lines.append(f"{'👤' if entry.role == 'user' else '🤖'} {_t(entry.text)}")
+    lines.append(f"👤 {_t(msg.text)}")
+    lines.append(f"🤖 {_t(bot_reply)}")
+    lines.append("─────")
+    lines.append(f"ℹ️ Авторезюме после {exchange_count} обменов.")
+    return "\n".join(lines)
 
 
 class ReplySender:
@@ -594,14 +644,31 @@ class Pipeline:
                         log.warning("pipeline.quota_notify_failed", error=str(exc))
 
         # Уровень 7: CHAT-MODE гейтинг.
-        # Если включена фича на ЖК + жилец в whitelist — переключаемся на
-        # ChatResponder с историей переписки. Иначе всё как раньше.
-        # ВАЖНО: chat-mode не применяется для AGGRESSION/PROVOCATION (модерация
-        # должна работать), для silent_characters в целом, и при quota_exceeded
-        # (квота — высший приоритет, иначе её можно обойти болтанием).
-        # ТАКЖЕ: на addressed_to=UNCLEAR молчим даже в chat-mode. Бессодержательные
-        # реплики («ало», «ну?», «гм», «ок хорошо») не должны провоцировать ChatResponder
-        # генерировать новые реплики — иначе диалог превращается в спам-машину.
+        # Если включена фича на ЖК — переключаемся на ChatResponder с историей.
+        # Три пути входа в chat-mode:
+        #   1) Жилец в whitelist (явный выбор управляющего — «всегда диалог»).
+        #   2) reply_to_bot=True + есть история → продолжение уже начатого диалога.
+        #   3) COMPLAINT_STRONG, адресованный УК → автоинициация для жёстких жалоб.
+        # ВАЖНО: chat-mode не работает при AGGRESSION/PROVOCATION (это silent_chars),
+        # при quota_exceeded (квота — высший приоритет), и на UNCLEAR-адресации.
+
+        # Предзагружаем историю до решения о chat-mode: нужна как для детекции
+        # продолжения диалога, так и для передачи в ChatResponder без повторного
+        # обращения к БД.
+        _prior_history: list | None = None
+        if (
+            complex_info.chat_mode_enabled
+            and self._chat_mode_repo is not None
+            and msg.user_id is not None
+        ):
+            try:
+                _prior_history = await self._chat_mode_repo.get_history(
+                    chat_id=msg.chat_id, user_id=msg.user_id,
+                )
+            except Exception as exc:
+                log.warning("pipeline.history_preload_failed", error=str(exc))
+                _prior_history = []
+
         use_chat_mode = (
             complex_info.chat_mode_enabled
             and self._chat_mode_repo is not None
@@ -610,18 +677,18 @@ class Pipeline:
             and not quota_exceeded
             and cls.addressed_to != AddressedTo.UNCLEAR
             and msg.user_id is not None
-            and await self._chat_mode_repo.is_whitelisted(
-                chat_id=msg.chat_id, user_id=msg.user_id,
+            and (
+                is_chat_mode_user                          # явный whitelist
+                or (msg.reply_to_bot and bool(_prior_history))  # продолжение диалога
+                or _should_auto_engage(cls)                # жёсткая жалоба → автодиалог
             )
         )
 
         proposed_reply: str | None = None
         if use_chat_mode:
-            # Болтание: грузим историю, генерим реплику, добавляем в историю.
+            # Используем предзагруженную историю — повторный запрос к БД не нужен.
             try:
-                history = await self._chat_mode_repo.get_history(  # type: ignore[union-attr]
-                    chat_id=msg.chat_id, user_id=msg.user_id,
-                )
+                history = _prior_history if _prior_history is not None else []
                 proposed_reply = await self._chat_responder.respond(  # type: ignore[union-attr]
                     text=msg.text,
                     history=history,
@@ -632,6 +699,7 @@ class Pipeline:
                     "pipeline.chat_mode_reply",
                     user_id=msg.user_id, chat_id=msg.chat_id,
                     history_len=len(history),
+                    auto_engaged=not is_chat_mode_user,
                 )
             except Exception as exc:
                 log.exception("pipeline.chat_mode_crash", error=str(exc))
@@ -759,8 +827,16 @@ class Pipeline:
                     )
                 except Exception as exc:
                     log.warning("pipeline.chat_context_attach_failed", error=str(exc))
-            # Если это chat-mode — пишем оба сообщения (юзера и бота) в историю.
-            if use_chat_mode and self._chat_mode_repo is not None and msg.user_id is not None:
+            # Сохраняем историю переписки для контекста LLM.
+            # * chat-mode: обязательно (диалог с памятью).
+            # * normal mode: тоже сохраняем, если chat_mode_enabled — чтобы
+            #   future reply_to_bot смог «подхватить» контекст и переключиться
+            #   в chat-mode без потери первого обмена.
+            if (
+                self._chat_mode_repo is not None
+                and msg.user_id is not None
+                and complex_info.chat_mode_enabled
+            ):
                 try:
                     await self._chat_mode_repo.append_message(
                         chat_id=msg.chat_id, user_id=msg.user_id,
@@ -770,8 +846,42 @@ class Pipeline:
                         chat_id=msg.chat_id, user_id=msg.user_id,
                         role="assistant", text=decision.reply_text,
                     )
+                    if not use_chat_mode:
+                        log.debug(
+                            "pipeline.history_seeded",
+                            chat_id=msg.chat_id, user_id=msg.user_id,
+                        )
                 except Exception as exc:
                     log.warning("pipeline.chat_history_append_failed", error=str(exc))
+
+            # Резюме диалога управляющему: отправляем ОДИН раз после 3-го обмена
+            # (len(_prior_history) == 4 = два готовых обмена, начинается третий).
+            # Заменяет мусорные per-message уведомления в режиме chat-mode.
+            if (
+                use_chat_mode
+                and _prior_history is not None
+                and len(_prior_history) == 4
+                and self._notifier is not None
+                and complex_info.escalate_to_chat
+                and complex_info.escalation_chat_id
+            ):
+                try:
+                    summary = _format_chat_mode_summary(
+                        msg=msg,
+                        complex_info=complex_info,
+                        history=_prior_history,
+                        bot_reply=decision.reply_text,
+                    )
+                    await self._notifier.send_notification_to_chat(
+                        chat_id=complex_info.escalation_chat_id, text=summary,
+                    )
+                    log.info(
+                        "pipeline.chat_mode_summary_sent",
+                        chat_id=msg.chat_id, user_id=msg.user_id,
+                        exchanges=(len(_prior_history) + 2) // 2,
+                    )
+                except Exception as exc:
+                    log.warning("pipeline.chat_mode_summary_failed", error=str(exc))
 
         # Вычисляем is_addressed_to_uc заранее — используется и для will_delete
         # (до эскалации), и для модерации (после эскалации).
@@ -821,7 +931,10 @@ class Pipeline:
             # Автоответ был, эскалация не нужна → дублируем как уведомление в
             # чат «Обращения» (для аудита), если включено. В личку НЕ шлём —
             # там должно быть только то, что требует реакции.
-            await self._maybe_notify_chat(complex_info, msg, cls, decision, prior_ctx)
+            # Chat-mode: per-message уведомление подавляем — управляющий получит
+            # одно компактное резюме после порогового числа обменов.
+            if not use_chat_mode:
+                await self._maybe_notify_chat(complex_info, msg, cls, decision, prior_ctx)
 
         # Авто-модерация: AGGRESSION/PROVOCATION → удаление + страйк.
         # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
