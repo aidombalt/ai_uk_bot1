@@ -177,6 +177,21 @@ class ChatModeRepo:
         return [ChatMessage(role=r["role"], text=r["text"])
                 for r in reversed(rows)]
 
+    async def has_recent_history(
+        self, *, chat_id: int, user_id: int, within_minutes: int = 30,
+    ) -> bool:
+        """True если есть записи не старше `within_minutes` минут.
+
+        Используется pipeline'ом для определения — это followup в рамках
+        активного диалога или новое независимое обращение.
+        """
+        cur = await self._db.conn.execute(
+            "SELECT 1 FROM chat_messages WHERE chat_id=? AND user_id=? "
+            "AND created_at >= datetime('now', ? || ' minutes') LIMIT 1",
+            (chat_id, user_id, f"-{within_minutes}"),
+        )
+        return (await cur.fetchone()) is not None
+
     async def clear_history(self, *, chat_id: int, user_id: int) -> None:
         await self._db.conn.execute(
             "DELETE FROM chat_messages WHERE chat_id=? AND user_id=?",

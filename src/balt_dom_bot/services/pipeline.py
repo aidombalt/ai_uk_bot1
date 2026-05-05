@@ -17,7 +17,6 @@ from balt_dom_bot.models import (
     PipelineDecision,
     ReplyMode,
     Theme,
-    Urgency,
 )
 from balt_dom_bot.services.classifier import Classifier, is_off_topic
 from balt_dom_bot.services import spam_detector
@@ -98,21 +97,6 @@ def _build_complex_info(complex_row: Any, cfg: AppConfig) -> ComplexInfo:
         chat_mode_enabled=bool(getattr(complex_row, "chat_mode_enabled", False)),
     )
 
-
-def _should_auto_engage(cls: Classification) -> bool:
-    """Проверяет, стоит ли автоматически инициировать chat-mode для нелистиста.
-
-    True только для жёстких жалоб, адресованных УК (или неопределённых —
-    benefit of the doubt). Высокая срочность и агрессия исключены: они идут
-    в эскалацию, не в диалог.
-    """
-    if cls.addressed_to not in (None, AddressedTo.UC):
-        return False
-    if cls.character in (Character.AGGRESSION, Character.PROVOCATION):
-        return False
-    if cls.urgency == Urgency.HIGH or cls.theme == Theme.EMERGENCY:
-        return False
-    return cls.character == Character.COMPLAINT_STRONG
 
 
 def _format_chat_mode_summary(
@@ -647,8 +631,8 @@ class Pipeline:
         # Если включена фича на ЖК — переключаемся на ChatResponder с историей.
         # Три пути входа в chat-mode:
         #   1) Жилец в whitelist (явный выбор управляющего — «всегда диалог»).
-        #   2) reply_to_bot=True + есть история → продолжение уже начатого диалога.
-        #   3) COMPLAINT_STRONG, адресованный УК → автоинициация для жёстких жалоб.
+        #   2) reply_to_bot=True + есть история → продолжение через reply-кнопку.
+        #   3) Есть недавняя история (30 мин) → followup без reply-кнопки.
         # ВАЖНО: chat-mode не работает при AGGRESSION/PROVOCATION (это silent_chars),
         # при quota_exceeded (квота — высший приоритет), и на UNCLEAR-адресации.
 
@@ -669,6 +653,21 @@ class Pipeline:
                 log.warning("pipeline.history_preload_failed", error=str(exc))
                 _prior_history = []
 
+        # Проверяем наличие недавней истории — только если есть хоть какие-то записи.
+        # Определяет продолжение диалога без использования reply-кнопки (окно 30 мин).
+        _has_recent_history = False
+        if (
+            _prior_history
+            and self._chat_mode_repo is not None
+            and msg.user_id is not None
+        ):
+            try:
+                _has_recent_history = await self._chat_mode_repo.has_recent_history(
+                    chat_id=msg.chat_id, user_id=msg.user_id,
+                )
+            except Exception as exc:
+                log.warning("pipeline.recent_history_check_failed", error=str(exc))
+
         use_chat_mode = (
             complex_info.chat_mode_enabled
             and self._chat_mode_repo is not None
@@ -678,9 +677,9 @@ class Pipeline:
             and cls.addressed_to != AddressedTo.UNCLEAR
             and msg.user_id is not None
             and (
-                is_chat_mode_user                          # явный whitelist
-                or (msg.reply_to_bot and bool(_prior_history))  # продолжение диалога
-                or _should_auto_engage(cls)                # жёсткая жалоба → автодиалог
+                is_chat_mode_user                               # явный whitelist
+                or (msg.reply_to_bot and bool(_prior_history))  # reply-кнопка + история
+                or _has_recent_history                          # свежий followup (30 мин)
             )
         )
 

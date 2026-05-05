@@ -1,9 +1,9 @@
 """Smoke-тесты новой логики chat-mode.
 
 Проверяем:
-1. _should_auto_engage: правильно фильтрует только COMPLAINT_STRONG → UC.
-2. Pipeline активирует chat-mode для нелистиста при COMPLAINT_STRONG.
-3. Pipeline активирует chat-mode при reply_to_bot + есть история.
+1. Pipeline активирует chat-mode при reply_to_bot + есть история.
+2. Pipeline активирует chat-mode при недавнем followup (has_recent_history).
+3. Pipeline НЕ активирует chat-mode для COMPLAINT_STRONG без истории.
 4. Pipeline НЕ активирует chat-mode для простого вопроса без истории.
 5. После обычного ответа история сидируется в chat_messages.
 6. Резюме отправляется управляющему на 3-м обмене (len(prior_history)==4).
@@ -30,7 +30,6 @@ from balt_dom_bot.models import (
 from balt_dom_bot.services.pipeline import (
     Pipeline,
     ReplySender,
-    _should_auto_engage,
 )
 from balt_dom_bot.storage.chat_mode_repo import ChatMessage
 from balt_dom_bot.storage.complexes_repo import ComplexRow
@@ -170,9 +169,11 @@ class _FakeChatModeRepo:
         self,
         whitelisted: bool = False,
         history: list[ChatMessage] | None = None,
+        has_recent: bool = False,
     ) -> None:
         self._whitelisted = whitelisted
         self._history: list[ChatMessage] = history or []
+        self._has_recent = has_recent
         self.appended: list[tuple[str, str]] = []
 
     async def is_whitelisted(self, *, chat_id: int, user_id: int) -> bool:
@@ -180,6 +181,11 @@ class _FakeChatModeRepo:
 
     async def get_history(self, *, chat_id: int, user_id: int) -> list[ChatMessage]:
         return list(self._history)
+
+    async def has_recent_history(
+        self, *, chat_id: int, user_id: int, within_minutes: int = 30,
+    ) -> bool:
+        return self._has_recent
 
     async def append_message(self, *, chat_id: int, user_id: int, role: str, text: str) -> None:
         self.appended.append((role, text))
@@ -243,74 +249,29 @@ def _build_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Тесты _should_auto_engage (unit)
-# ---------------------------------------------------------------------------
-
-
-def test_auto_engage_complaint_strong_uc() -> None:
-    cls = _make_cls(character=Character.COMPLAINT_STRONG, addressed_to=AddressedTo.UC)
-    assert _should_auto_engage(cls) is True
-
-
-def test_auto_engage_complaint_strong_none_addressed() -> None:
-    """addressed_to=None (fallback от StubClassifier) → benefit of the doubt."""
-    cls = _make_cls(character=Character.COMPLAINT_STRONG, addressed_to=AddressedTo.UC)
-    cls2 = cls.model_copy(update={"addressed_to": None})
-    assert _should_auto_engage(cls2) is True
-
-
-def test_auto_engage_rejects_residents() -> None:
-    cls = _make_cls(character=Character.COMPLAINT_STRONG, addressed_to=AddressedTo.RESIDENTS)
-    assert _should_auto_engage(cls) is False
-
-
-def test_auto_engage_rejects_question() -> None:
-    cls = _make_cls(character=Character.QUESTION, addressed_to=AddressedTo.UC)
-    assert _should_auto_engage(cls) is False
-
-
-def test_auto_engage_rejects_complaint_mild() -> None:
-    cls = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
-    assert _should_auto_engage(cls) is False
-
-
-def test_auto_engage_rejects_aggression() -> None:
-    cls = _make_cls(character=Character.AGGRESSION, addressed_to=AddressedTo.UC)
-    assert _should_auto_engage(cls) is False
-
-
-def test_auto_engage_rejects_high_urgency() -> None:
-    cls = _make_cls(character=Character.COMPLAINT_STRONG, urgency=Urgency.HIGH)
-    assert _should_auto_engage(cls) is False
-
-
-def test_auto_engage_rejects_emergency_theme() -> None:
-    cls = _make_cls(character=Character.COMPLAINT_STRONG, theme=Theme.EMERGENCY)
-    assert _should_auto_engage(cls) is False
-
-
-# ---------------------------------------------------------------------------
 # Тесты pipeline: активация chat-mode
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_chat_mode_activates_for_complaint_strong() -> None:
-    """Нелистиста с COMPLAINT_STRONG → chat-mode должен включиться."""
-    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=[])
+async def test_chat_mode_not_activated_for_complaint_strong_no_history() -> None:
+    """COMPLAINT_STRONG без истории → НЕ chat-mode (не инициируем диалог первым)."""
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=[], has_recent=False)
     chat_responder = _FakeChatResponder()
+    normal_responder = _FakeResponder(reply="Принято")
     cls = _make_cls(character=Character.COMPLAINT_STRONG, addressed_to=AddressedTo.UC)
     pipeline, reply_sender, _ = _build_pipeline(
         cls, _make_complex_row(),
         chat_mode_repo=chat_mode_repo,
         chat_responder=chat_responder,
+        responder=normal_responder,
     )
     msg = _make_msg("Уже третий раз не работает домофон")
     await pipeline.handle(msg)
 
-    assert chat_responder.called, "ChatResponder должен быть вызван для COMPLAINT_STRONG"
-    assert reply_sender.replies, "Ответ должен быть отправлен в чат"
-    assert reply_sender.replies[0] == "Ответ в режиме диалога"
+    assert not chat_responder.called, "COMPLAINT_STRONG без истории не должен инициировать chat-mode"
+    assert normal_responder.called
+    assert reply_sender.replies[0] == "Принято"
 
 
 @pytest.mark.asyncio
@@ -333,6 +294,52 @@ async def test_chat_mode_activates_on_reply_to_bot_with_history() -> None:
 
     assert chat_responder.called, "Должен использоваться chat-mode при reply_to_bot + история"
     assert chat_responder.received_history == history
+
+
+@pytest.mark.asyncio
+async def test_chat_mode_activates_for_recent_followup() -> None:
+    """Followup без reply-кнопки, но с недавней историей → chat-mode продолжается."""
+    history = [
+        ChatMessage(role="user", text="Грязно в подъезде"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=history, has_recent=True)
+    chat_responder = _FakeChatResponder()
+    cls = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
+    pipeline, reply_sender, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+    )
+    msg = _make_msg("Первый подъезд", reply_to_bot=False)
+    await pipeline.handle(msg)
+
+    assert chat_responder.called, "Недавний followup должен продолжить chat-mode"
+    assert chat_responder.received_history == history
+
+
+@pytest.mark.asyncio
+async def test_chat_mode_not_activated_for_old_history() -> None:
+    """История есть, но последнее сообщение > 30 мин назад → обычный responder."""
+    history = [
+        ChatMessage(role="user", text="Грязно в подъезде"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=history, has_recent=False)
+    chat_responder = _FakeChatResponder()
+    normal_responder = _FakeResponder(reply="Обычный ответ")
+    cls = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
+    pipeline, _, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+        responder=normal_responder,
+    )
+    msg = _make_msg("Первый подъезд", reply_to_bot=False)
+    await pipeline.handle(msg)
+
+    assert not chat_responder.called, "Старая история не должна активировать chat-mode"
+    assert normal_responder.called
 
 
 @pytest.mark.asyncio
