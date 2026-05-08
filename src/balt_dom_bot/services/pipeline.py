@@ -676,6 +676,13 @@ class Pipeline:
             except Exception as exc:
                 log.warning("pipeline.recent_history_check_failed", error=str(exc))
 
+        # Количество уже завершённых обменов: каждый обмен = 2 записи (user + assistant).
+        # Используется для ограничения авто-включения chat mode: после N обменов
+        # авто-режим отключается, чтобы следующие жалобы на другие темы обрабатывались
+        # как свежие обращения. Явный reply-to-bot или whitelist всегда работают.
+        _completed_exchanges = len(_prior_history) // 2 if _prior_history else 0
+        _MAX_AUTO_CHAT_EXCHANGES = 2
+
         use_chat_mode = (
             complex_info.chat_mode_enabled
             and self._chat_mode_repo is not None
@@ -685,11 +692,26 @@ class Pipeline:
             and cls.addressed_to != AddressedTo.UNCLEAR
             and msg.user_id is not None
             and (
-                is_chat_mode_user                               # явный whitelist
-                or (msg.reply_to_bot and bool(_prior_history))  # reply-кнопка + история
-                or _has_recent_history                          # свежий followup (30 мин)
+                is_chat_mode_user                               # явный whitelist — всегда
+                or (msg.reply_to_bot and bool(_prior_history))  # явный reply-to-bot — всегда
+                or (                                            # авто-followup: ограничен N обменами
+                    _has_recent_history
+                    and _completed_exchanges < _MAX_AUTO_CHAT_EXCHANGES
+                )
             )
         )
+        if (
+            _has_recent_history
+            and not is_chat_mode_user
+            and not (msg.reply_to_bot and bool(_prior_history))
+            and _completed_exchanges >= _MAX_AUTO_CHAT_EXCHANGES
+        ):
+            log.info(
+                "pipeline.chat_mode_auto_limit",
+                user_id=msg.user_id, chat_id=msg.chat_id,
+                completed_exchanges=_completed_exchanges,
+                limit=_MAX_AUTO_CHAT_EXCHANGES,
+            )
 
         proposed_reply: str | None = None
         if use_chat_mode:

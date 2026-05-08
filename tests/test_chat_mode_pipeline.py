@@ -538,3 +538,107 @@ async def test_no_per_message_notify_in_chat_mode() -> None:
     assert len(notifier.notifications) == 0, (
         "При chat-mode первые два обмена — без уведомлений (резюме придёт позже)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Тесты: лимит авто-включения chat-mode (_MAX_AUTO_CHAT_EXCHANGES = 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_chat_mode_blocked_after_two_exchanges() -> None:
+    """После 2 автообменов (history_len=4) авто-включение chat-mode блокируется."""
+    history_four = [
+        ChatMessage(role="user", text="Лёд с крыш"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+        ChatMessage(role="user", text="Везде летит, глыбы у первых двух"),
+        ChatMessage(role="assistant", text="Информация принята"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=history_four, has_recent=True)
+    chat_responder = _FakeChatResponder()
+    normal_responder = _FakeResponder(reply="Стандартный ответ")
+    cls = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC,
+                    theme=Theme.SECURITY)
+    pipeline, reply_sender, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+        responder=normal_responder,
+    )
+    # Третья жалоба на другую тему — парковка у шлагбаума
+    msg = _make_msg("Паркуются у шлагбаумов и таранят пакеты")
+    await pipeline.handle(msg)
+
+    assert not chat_responder.called, (
+        "После 2 авто-обменов (history_len=4) chat-mode должен быть заблокирован"
+    )
+    assert normal_responder.called, "Должен использоваться обычный responder"
+    assert reply_sender.replies, "Бот должен ответить (стандартным ответом)"
+
+
+@pytest.mark.asyncio
+async def test_auto_chat_mode_allowed_at_first_two_exchanges() -> None:
+    """До лимита (history_len=2 → exchange=1) авто-включение разрешено."""
+    history_two = [
+        ChatMessage(role="user", text="Лёд с крыш"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=history_two, has_recent=True)
+    chat_responder = _FakeChatResponder()
+    cls = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
+    pipeline, _, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+    )
+    msg = _make_msg("Везде летит, глыбы у первых двух подъездов")
+    await pipeline.handle(msg)
+
+    assert chat_responder.called, "При exchange_count=1 < 2 авто-включение должно работать"
+
+
+@pytest.mark.asyncio
+async def test_reply_to_bot_bypasses_auto_limit() -> None:
+    """Явный reply-to-bot всегда включает chat-mode, даже после лимита."""
+    history_four = [
+        ChatMessage(role="user", text="Лёд с крыш"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+        ChatMessage(role="user", text="Везде летит, глыбы у первых двух"),
+        ChatMessage(role="assistant", text="Информация принята"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=False, history=history_four, has_recent=True)
+    chat_responder = _FakeChatResponder()
+    cls = _make_cls(character=Character.QUESTION, addressed_to=AddressedTo.UC)
+    pipeline, _, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+    )
+    # Явный reply-to-bot должен обходить лимит
+    msg = _make_msg("А когда уберут?", reply_to_bot=True)
+    await pipeline.handle(msg)
+
+    assert chat_responder.called, "Явный reply-to-bot должен обходить лимит авто-обменов"
+
+
+@pytest.mark.asyncio
+async def test_whitelist_bypasses_auto_limit() -> None:
+    """Whitelist-юзер всегда получает chat-mode, даже после лимита авто-обменов."""
+    history_four = [
+        ChatMessage(role="user", text="Лёд с крыш"),
+        ChatMessage(role="assistant", text="Понял, уточните подъезд"),
+        ChatMessage(role="user", text="Везде летит, глыбы у первых двух"),
+        ChatMessage(role="assistant", text="Информация принята"),
+    ]
+    chat_mode_repo = _FakeChatModeRepo(whitelisted=True, history=history_four, has_recent=True)
+    chat_responder = _FakeChatResponder()
+    cls = _make_cls(character=Character.QUESTION, addressed_to=AddressedTo.UC)
+    pipeline, _, _ = _build_pipeline(
+        cls, _make_complex_row(),
+        chat_mode_repo=chat_mode_repo,
+        chat_responder=chat_responder,
+    )
+    msg = _make_msg("Ещё вопрос про лифт")
+    await pipeline.handle(msg)
+
+    assert chat_responder.called, "Whitelist-юзер всегда в chat-mode независимо от лимита"
