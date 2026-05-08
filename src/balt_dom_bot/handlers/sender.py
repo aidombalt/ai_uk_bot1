@@ -34,16 +34,25 @@ def _extract_mid(sent_message: Any) -> str | None:
     return str(mid) if mid else None
 
 
-def _build_inline_keyboard(approve_payload: str, ignore_payload: str) -> list[Any]:
-    """Строит inline-клавиатуру с двумя кнопками (approve / ignore)."""
+def _build_inline_keyboard(approve_payload: str | None, ignore_payload: str) -> list[Any]:
+    """Строит inline-клавиатуру для карточки эскалации.
+
+    approve_payload=None → сообщение уже обработано автоматически (auto_deleted).
+    В этом случае кнопка «Одобрить» не нужна: показываем только «Принято к сведению».
+    """
     from maxapi.types.attachments.buttons import CallbackButton  # type: ignore[import-not-found]
     from maxapi.utils.inline_keyboard import InlineKeyboardBuilder  # type: ignore[import-not-found]
 
     kb = InlineKeyboardBuilder()
-    kb.row(
-        CallbackButton(text="✅ Одобрить автоответ", payload=approve_payload),
-        CallbackButton(text="🙈 Игнорировать", payload=ignore_payload),
-    )
+    if approve_payload is not None:
+        kb.row(
+            CallbackButton(text="✅ Одобрить автоответ", payload=approve_payload),
+            CallbackButton(text="🙈 Игнорировать", payload=ignore_payload),
+        )
+    else:
+        kb.row(
+            CallbackButton(text="✓ Принято к сведению", payload=ignore_payload),
+        )
     return [kb.as_markup()]
 
 
@@ -172,7 +181,7 @@ class MaxBotEscalationSender:
         *,
         chat_id: int,
         text: str,
-        approve_payload: str,
+        approve_payload: str | None,
         ignore_payload: str,
     ) -> str | None:
         kb = _build_inline_keyboard(approve_payload, ignore_payload)
@@ -193,7 +202,7 @@ class MaxBotEscalationSender:
         *,
         user_id: int,  # на самом деле chat_id личного диалога (исторически)
         text: str,
-        approve_payload: str,
+        approve_payload: str | None,
         ignore_payload: str,
     ) -> str | None:
         """Отправляет в личный диалог управляющего.

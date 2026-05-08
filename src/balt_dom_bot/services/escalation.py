@@ -41,10 +41,14 @@ class MessageSender(Protocol):
         *,
         chat_id: int,
         text: str,
-        approve_payload: str,
+        approve_payload: str | None,
         ignore_payload: str,
     ) -> str | None:
-        """Отправка в групповой чат. Возвращает mid или None."""
+        """Отправка в групповой чат. Возвращает mid или None.
+
+        approve_payload=None означает «сообщение уже обработано автоматически»:
+        кнопка «Одобрить автоответ» не показывается, только «Принято к сведению».
+        """
         ...
 
     async def send_escalation_to_user(
@@ -52,11 +56,12 @@ class MessageSender(Protocol):
         *,
         user_id: int,
         text: str,
-        approve_payload: str,
+        approve_payload: str | None,
         ignore_payload: str,
     ) -> str | None:
         """Отправка в личку. Возвращает mid или None.
 
+        approve_payload=None → только кнопка «Принято к сведению» (auto_deleted).
         В Max работает только если пользователь хотя бы раз написал боту.
         Иначе вернёт None и залогирует dialog.not.found.
         """
@@ -91,11 +96,17 @@ def render_card(
         if auto_deleted else ""
     )
 
-    proposed_block = (
-        f"\n\n💬 Предложенный автоответ:\n«{proposed_reply}»"
-        if proposed_reply
-        else "\n\n💬 Автоответ не сформирован — нужен ручной."
-    )
+    if auto_deleted:
+        # Сообщение уже удалено автоматически → никаких действий от управляющего
+        # по автоответу не требуется. Показываем это явно.
+        proposed_block = "\n\n✅ Действие выполнено автоматически — ручной ответ не требуется."
+        footer = "↩️ При необходимости написать жильцу — пришлите реплай на это сообщение."
+    elif proposed_reply:
+        proposed_block = f"\n\n💬 Предложенный автоответ:\n«{proposed_reply}»"
+        footer = "↩️ Чтобы написать жильцу своими словами — пришлите реплай на это сообщение."
+    else:
+        proposed_block = "\n\n💬 Автоответ не сформирован — нужен ручной."
+        footer = "↩️ Чтобы написать жильцу своими словами — пришлите реплай на это сообщение."
 
     # Предыстория жильца: его предшествующие сообщения в хронологическом
     # порядке. Только от этого пользователя — управляющему не нужен весь
@@ -127,7 +138,7 @@ def render_card(
         f"{context_block}"
         f"{proposed_block}\n"
         f"─────────────────\n"
-        f"↩️ Чтобы написать жильцу своими словами — пришлите реплай на это сообщение."
+        f"{footer}"
     )
 
 
@@ -185,7 +196,10 @@ class Escalator:
             prior_context=prior_context,
             auto_deleted=auto_deleted,
         )
-        approve_payload = f"e:a:{esc_id}"
+        # Кнопка «Одобрить автоответ» бессмысленна если сообщение уже удалено
+        # автоматически (proposed_reply=None, действие выполнено). Передаём
+        # approve_payload=None → sender покажет только «Принято к сведению».
+        approve_payload: str | None = None if auto_deleted else f"e:a:{esc_id}"
         ignore_payload = f"e:i:{esc_id}"
 
         # 2. Пробуем доставить хотя бы одним каналом. Сохраняем mid отдельно
