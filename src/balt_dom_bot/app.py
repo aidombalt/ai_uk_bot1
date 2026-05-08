@@ -205,7 +205,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     )
     cooldown = CooldownManager(
         replies_per_minute=2,
-        cooldown_minutes=5,
+        cooldown_minutes=10,
         escalation_dedup_minutes=10,
     )
 
@@ -262,6 +262,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
         complexes=complexes_repo, global_settings=global_settings,
         bans=bans_repo, moderator=moderator,
         manager_reply_repo=manager_reply_repo,
+        cooldown=cooldown,
     )
 
     # Seed дефолтных промтов в БД при старте, чтобы они появились в GUI сразу

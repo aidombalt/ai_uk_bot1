@@ -219,6 +219,7 @@ class Escalator:
                             resident_chat_id=incoming.chat_id,
                             resident_mid=incoming.message_id,
                             resident_name=incoming.user_name,
+                            resident_user_id=incoming.user_id,
                         )
                     except Exception as exc:
                         log.warning("escalator.notif_map_save_failed", error=str(exc))

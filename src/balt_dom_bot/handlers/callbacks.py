@@ -42,6 +42,7 @@ def register_callback_handlers(
     bans: Any = None,            # BansRepo
     moderator: Any = None,       # Moderator (для разбана)
     manager_reply_repo: ManagerReplyRepo | None = None,
+    cooldown: Any = None,        # CooldownManager
 ) -> None:
     @dp.message_callback()
     async def on_callback(event: Any) -> None:  # type: ignore[no-untyped-def]
@@ -114,6 +115,7 @@ def register_callback_handlers(
                 reply_sender=reply_sender,
                 escalation_sender=escalation_sender,
                 message_log=message_log,
+                cooldown=cooldown,
             )
             return
 
@@ -128,6 +130,7 @@ def register_callback_handlers(
                 reply_sender=reply_sender,
                 escalation_sender=escalation_sender,
                 message_log=message_log,
+                cooldown=cooldown,
             )
             return
 
@@ -321,6 +324,9 @@ async def _resend_status(
         log.warning("admin_callback.resend_failed", error=str(exc))
 
 
+_MANAGER_REPLY_COOLDOWN_SECONDS = 15 * 60  # 15 минут после ответа управляющего
+
+
 async def _handle_manager_reply(
     event: Any,
     *,
@@ -330,6 +336,7 @@ async def _handle_manager_reply(
     reply_sender: MaxBotReplySender,
     escalation_sender: MaxBotEscalationSender,
     message_log: MessageLog | None,
+    cooldown: Any = None,
 ) -> None:
     """Обрабатывает нажатие «Отправить форматированный / Отправить оригинал»."""
     if manager_reply_repo is None:
@@ -376,6 +383,18 @@ async def _handle_manager_reply(
             )
         except Exception as exc:
             log.warning("manager_reply_cb.log_failed", error=str(exc))
+
+    # После отправки ответа жильцу включаем cooldown — чтобы он не завалил
+    # бота сообщениями сразу после получения ответа от управляющего.
+    if cooldown is not None and draft.resident_user_id is not None:
+        try:
+            cooldown.force_cooldown(
+                chat_id=draft.resident_chat_id,
+                user_id=draft.resident_user_id,
+                duration_seconds=_MANAGER_REPLY_COOLDOWN_SECONDS,
+            )
+        except Exception as exc:
+            log.warning("manager_reply_cb.cooldown_failed", error=str(exc))
 
     # Заменяем карточку выбора финальным сообщением без кнопок
     variant = "форматированный ✅" if send_formatted else "оригинал 📝"

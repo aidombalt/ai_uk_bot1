@@ -391,6 +391,20 @@ async def _m11_manager_reply_flow(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _m12_resident_user_id(conn: aiosqlite.Connection) -> None:
+    """Добавляем resident_user_id в notification_map и manager_reply_drafts.
+
+    Позволяет принудительно включать cooldown для жильца после того, как
+    управляющий отправил ему ответ через Manager Reply Flow.
+    """
+    await conn.execute(
+        "ALTER TABLE notification_map ADD COLUMN resident_user_id INTEGER"
+    )
+    await conn.execute(
+        "ALTER TABLE manager_reply_drafts ADD COLUMN resident_user_id INTEGER"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _m1_escalations,
     _m2_logs_and_cache,
@@ -403,6 +417,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _m9_trolling_strikes_and_bans,
     _m10_quotas_and_chat,
     _m11_manager_reply_flow,
+    _m12_resident_user_id,
 )
 
 

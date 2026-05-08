@@ -172,6 +172,35 @@ class CooldownManager:
         dq.append(now)
         return len(dq)
 
+    def force_cooldown(
+        self,
+        *,
+        chat_id: int,
+        user_id: int | None,
+        duration_seconds: float | None = None,
+    ) -> None:
+        """Принудительно включает cooldown для пользователя на duration_seconds.
+
+        Используется после того, как управляющий отправил ответ жильцу —
+        чтобы исключить новый поток сообщений сразу после получения ответа.
+        Если cooldown уже активен и его конец позже, не трогаем.
+        """
+        if user_id is None:
+            return
+        if duration_seconds is None:
+            duration_seconds = self._cooldown_seconds
+        now = self._now()
+        key = (chat_id, user_id)
+        new_until = now + duration_seconds
+        current_until = self._cooldown_until.get(key, 0.0)
+        if new_until > current_until:
+            self._cooldown_until[key] = new_until
+            log.info(
+                "cooldown.forced",
+                chat_id=chat_id, user_id=user_id,
+                duration_s=int(duration_seconds),
+            )
+
     # --- утилиты для отладки/тестов -----------------------------------------
 
     def reset(self) -> None:

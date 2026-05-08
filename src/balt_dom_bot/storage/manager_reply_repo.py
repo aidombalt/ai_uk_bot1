@@ -31,6 +31,7 @@ class NotificationEntry:
     resident_chat_id: int
     resident_mid: str
     resident_name: str | None
+    resident_user_id: int | None
     created_at: datetime
 
 
@@ -42,6 +43,7 @@ class DraftRow:
     complex_id: str
     resident_chat_id: int
     resident_mid: str
+    resident_user_id: int | None
     manager_text: str
     formatted_text: str | None
     status: DraftStatus
@@ -65,6 +67,7 @@ class ManagerReplyRepo:
         resident_chat_id: int,
         resident_mid: str,
         resident_name: str | None,
+        resident_user_id: int | None = None,
     ) -> None:
         """Сохраняет mid уведомления/карточки → контекст жильца.
 
@@ -75,11 +78,11 @@ class ManagerReplyRepo:
             """
             INSERT OR IGNORE INTO notification_map
               (notif_mid, notif_chat_id, complex_id, resident_chat_id,
-               resident_mid, resident_name)
-            VALUES (?, ?, ?, ?, ?, ?)
+               resident_mid, resident_name, resident_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (notif_mid, notif_chat_id, complex_id, resident_chat_id,
-             resident_mid, resident_name),
+             resident_mid, resident_name, resident_user_id),
         )
         await self._db.conn.commit()
         log.debug("notif_map.saved", notif_mid=notif_mid, complex_id=complex_id)
@@ -99,6 +102,7 @@ class ManagerReplyRepo:
             resident_chat_id=row["resident_chat_id"],
             resident_mid=row["resident_mid"],
             resident_name=row["resident_name"],
+            resident_user_id=row["resident_user_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
@@ -110,12 +114,13 @@ class ManagerReplyRepo:
             """
             INSERT INTO manager_reply_drafts
               (notif_mid, notif_chat_id, complex_id, resident_chat_id,
-               resident_mid, manager_text)
-            VALUES (?, ?, ?, ?, ?, ?)
+               resident_mid, resident_user_id, manager_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 notif.notif_mid, notif.notif_chat_id, notif.complex_id,
-                notif.resident_chat_id, notif.resident_mid, manager_text,
+                notif.resident_chat_id, notif.resident_mid,
+                notif.resident_user_id, manager_text,
             ),
         )
         await self._db.conn.commit()
@@ -204,6 +209,7 @@ def _row_to_draft(row) -> DraftRow:
         complex_id=row["complex_id"],
         resident_chat_id=row["resident_chat_id"],
         resident_mid=row["resident_mid"],
+        resident_user_id=row["resident_user_id"],
         manager_text=row["manager_text"],
         formatted_text=row["formatted_text"],
         status=DraftStatus(row["status"]),

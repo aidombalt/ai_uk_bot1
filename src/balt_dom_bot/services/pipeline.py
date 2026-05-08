@@ -1116,6 +1116,7 @@ class Pipeline:
                     resident_chat_id=msg.chat_id,
                     resident_mid=msg.message_id,
                     resident_name=msg.user_name,
+                    resident_user_id=msg.user_id,
                 )
             except Exception as exc:
                 log.warning("pipeline.notif_map_save_failed", error=str(exc))
