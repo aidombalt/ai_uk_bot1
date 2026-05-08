@@ -405,6 +405,17 @@ class Pipeline:
             )
         )
 
+        # Проверяем: ждём ли мы ответа этого жильца на наш уточняющий вопрос?
+        # Если да — обходим off-topic фильтр: короткие уточнения («Первая парадная»,
+        # «кв. 42») LLM часто маркирует как addressed_to=unclear, хотя это прямой
+        # ответ на вопрос бота. Состояние is_pending устанавливается ниже, в блоке
+        # completeness check, и очищается сразу после использования (one-shot).
+        _awaiting_clarification = (
+            self._completeness is not None
+            and msg.user_id is not None
+            and self._completeness.is_pending(msg.chat_id, msg.user_id)
+        )
+
         # Off-topic фильтр: болтовня жильцов между собой, не адресованная УК.
         # Бот молчит И не логирует как обращение, чтобы не засирать ленту/БД.
         # Агрессия/провокация при этом всё равно эскалируется — эта проверка
@@ -413,11 +424,12 @@ class Pipeline:
         # (эмоциональные жалобы тревожника). Для UNCLEAR сообщений (бессодержательные
         # «гм», «ну ну», крики) НЕ обходим — бот молчит, чтобы chat-mode не
         # генерировал спам в ответ на каждую реплику.
+        # Исключение: ответ на уточняющий вопрос бота (_awaiting_clarification).
         chat_mode_bypass_offtopic = (
             is_chat_mode_user
             and cls.addressed_to == AddressedTo.RESIDENTS
         )
-        if not chat_mode_bypass_offtopic and is_off_topic(
+        if not chat_mode_bypass_offtopic and not _awaiting_clarification and is_off_topic(
             msg.text, cls.theme, cls.character, cls.addressed_to,
         ):
             log.info(
@@ -508,6 +520,19 @@ class Pipeline:
                             error=str(exc),
                         )
             return PipelineDecision(classification=cls)
+
+        # Если пришли сюда мимо off-topic фильтра потому что ждали уточнения —
+        # логируем bypass и сбрасываем pending (one-shot: следующее сообщение
+        # будет проходить через обычный off-topic фильтр).
+        if _awaiting_clarification:
+            self._completeness.clear_pending(msg.chat_id, msg.user_id)  # type: ignore[union-attr]
+            log.info(
+                "pipeline.clarification_followup",
+                user_id=msg.user_id,
+                chat_id=msg.chat_id,
+                preview=msg.text[:60],
+                addressed_to=cls.addressed_to.value if cls.addressed_to else None,
+            )
 
         complex_info = _build_complex_info(complex_row, self._cfg)
 
@@ -768,6 +793,9 @@ class Pipeline:
                         theme=cls.theme.value,
                         character=cls.character.value,
                     )
+                    # Фиксируем ожидание ответа: следующее сообщение этого
+                    # пользователя обойдёт off-topic фильтр (one-shot).
+                    self._completeness.set_pending(msg.chat_id, msg.user_id)
             except Exception as exc:
                 log.warning("pipeline.completeness_check_failed", error=str(exc))
 

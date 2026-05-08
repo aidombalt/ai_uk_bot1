@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -100,10 +101,52 @@ class CompletenessChecker:
 
     Не делает LLM-вызовов: детектирование — regex, вопрос — настраиваемый
     шаблон (PromptProvider с дефолтом из кода).
+
+    Дополнительно хранит in-memory состояние «ожидание уточнения» для пар
+    (chat_id, user_id). Это нужно чтобы pipeline мог распознать следующее
+    сообщение пользователя как ответ на уточняющий вопрос бота (даже если
+    LLM классифицирует его как addressed_to=unclear) и не фильтровать его
+    через skip_off_topic. Состояние сбрасывается после первого использования
+    или по истечении TTL (по умолчанию 10 минут).
     """
 
-    def __init__(self, *, prompt_provider: "PromptProvider | None" = None):
+    def __init__(
+        self,
+        *,
+        prompt_provider: "PromptProvider | None" = None,
+        pending_ttl_seconds: int = 600,
+    ):
         self._prompts = prompt_provider
+        self._pending_ttl = pending_ttl_seconds
+        # (chat_id, user_id) → timestamp когда был отправлен уточняющий вопрос
+        self._pending: dict[tuple[int, int | None], float] = {}
+
+    def set_pending(self, chat_id: int, user_id: int | None) -> None:
+        """Зафиксировать, что бот задал уточняющий вопрос этому пользователю."""
+        self._pending[(chat_id, user_id)] = time.time()
+
+    def is_pending(self, chat_id: int, user_id: int | None) -> bool:
+        """True если бот ждёт ответа на уточняющий вопрос от этого пользователя.
+
+        Возвращает False и чистит запись если TTL истёк.
+        """
+        key = (chat_id, user_id)
+        ts = self._pending.get(key)
+        if ts is None:
+            return False
+        if time.time() - ts > self._pending_ttl:
+            del self._pending[key]
+            log.debug(
+                "completeness.pending_expired",
+                chat_id=chat_id, user_id=user_id,
+                age_s=int(time.time() - ts),
+            )
+            return False
+        return True
+
+    def clear_pending(self, chat_id: int, user_id: int | None) -> None:
+        """Снять отметку ожидания после того, как ответ пользователя обработан."""
+        self._pending.pop((chat_id, user_id), None)
 
     async def _get_question(self) -> str:
         if self._prompts is not None:
