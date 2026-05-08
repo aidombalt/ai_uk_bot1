@@ -77,6 +77,20 @@ class ComplexesRepo:
         self._cache_by_chat[chat_id] = (result, now + self._ttl)
         return result
 
+    async def find_by_escalation_chat(self, chat_id: int) -> ComplexRow | None:
+        """Возвращает ЖК, для которого данный chat_id является чатом «Обращения».
+
+        Используется для определения: является ли входящее сообщение репляем
+        управляющего в чате «Обращения» (не в основном чате ЖК).
+        Не кэшируется — этот путь не на горячем пути обработки жильцов.
+        """
+        cur = await self._db.conn.execute(
+            "SELECT * FROM complexes_db WHERE escalation_chat_id = ? AND active = 1",
+            (chat_id,),
+        )
+        row = await cur.fetchone()
+        return _row_to_complex(row) if row else None
+
     # --- write -------------------------------------------------------------
 
     async def upsert(

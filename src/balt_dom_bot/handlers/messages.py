@@ -8,14 +8,39 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from balt_dom_bot.log import get_logger
 from balt_dom_bot.models import IncomingMessage
 from balt_dom_bot.services.pipeline import Pipeline
 from balt_dom_bot.handlers import admin_commands as admin_cmd
 
+if TYPE_CHECKING:
+    from balt_dom_bot.handlers.manager_reply import ManagerReplyHandler
+
 log = get_logger(__name__)
+
+
+def _extract_linked_mid(msg: Any) -> str | None:
+    """Извлекает mid сообщения, на которое пришёл реплай (из msg.link)."""
+    try:
+        link = getattr(msg, "link", None)
+        if link is None:
+            return None
+        link_msg = getattr(link, "message", None)
+        if link_msg is None:
+            return None
+        # Стандартная структура MaxAPI: message.body.mid
+        body = getattr(link_msg, "body", None)
+        if body is not None:
+            mid = getattr(body, "mid", None)
+            if mid:
+                return str(mid)
+        # Fallback: mid прямо на объекте сообщения
+        mid = getattr(link_msg, "mid", None)
+        return str(mid) if mid else None
+    except Exception:
+        return None
 
 
 HELP_TEXT = (
@@ -34,7 +59,11 @@ def _is_help_command(text: str) -> bool:
     return normalized in ("/help", "/команды", "/cmd")
 
 
-def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
+def register_message_handlers(
+    dp: Any,
+    pipeline: Pipeline,
+    manager_reply_handler: "ManagerReplyHandler | None" = None,
+) -> None:
     @dp.message_created()
     async def on_message(event: Any) -> None:  # type: ignore[no-untyped-def]
         msg = event.message
@@ -151,6 +180,7 @@ def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
         linked_message_type: str | None = None
         reply_to_bot: bool = False
         linked_sender_name: str | None = None
+        linked_message_mid: str | None = None   # для manager reply flow
         try:
             link = getattr(msg, "link", None)
             if link is not None:
@@ -160,6 +190,7 @@ def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
                 link_sender = getattr(link, "sender", None)
                 if link_msg:
                     linked_message_text = getattr(link_msg, "text", None)
+                    linked_message_mid = _extract_linked_mid(msg)
                 if link_sender:
                     linked_sender_name = getattr(link_sender, "name", None)
                     link_sender_id = getattr(link_sender, "user_id", None)
@@ -189,6 +220,24 @@ def register_message_handlers(dp: Any, pipeline: Pipeline) -> None:
             mid=incoming.message_id,
             chars=len(text),
         )
+
+        # Manager Reply Flow: если сообщение является реплаем управляющего
+        # на отслеживаемое уведомление в чате «Обращения» — обрабатываем особо.
+        # Это должно произойти ДО pipeline, т.к. pipeline просто вернёт
+        # «unknown chat» для escalation_chat_id.
+        if manager_reply_handler is not None and linked_message_mid:
+            try:
+                handled = await manager_reply_handler.try_handle(
+                    chat_id=int(chat_id),
+                    user_id=sender_id,
+                    text=text,
+                    linked_mid=linked_message_mid,
+                )
+                if handled:
+                    return
+            except Exception as exc:
+                log.exception("manager_reply.crash", error=str(exc))
+
         try:
             await pipeline.handle(incoming)
         except Exception as exc:

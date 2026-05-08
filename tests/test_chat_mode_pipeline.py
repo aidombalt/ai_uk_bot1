@@ -133,7 +133,7 @@ class _FakeResponder:
         self._reply = reply
         self.called = False
 
-    async def respond(self, *, classification: Any, original_text: str, complex_info: Any) -> str | None:
+    async def respond(self, *, classification: Any, original_text: str, complex_info: Any, **kwargs: Any) -> str | None:
         self.called = True
         return self._reply
 

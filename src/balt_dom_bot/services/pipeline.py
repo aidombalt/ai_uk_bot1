@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from balt_dom_bot.storage.chat_mode_repo import ChatModeRepo
     from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     from balt_dom_bot.storage.global_settings_repo import GlobalSettingsRepo
+    from balt_dom_bot.storage.manager_reply_repo import ManagerReplyRepo
     from balt_dom_bot.storage.message_log import MessageLog
 
 log = get_logger(__name__)
@@ -191,6 +192,7 @@ class Pipeline:
         recent_replies: "RecentReplyTracker | None" = None,
         fragment_troll: "FragmentTrollDetector | None" = None,
         completeness: "CompletenessChecker | None" = None,
+        manager_reply_repo: "ManagerReplyRepo | None" = None,
     ):
         self._cfg = cfg
         self._classifier = classifier
@@ -210,6 +212,7 @@ class Pipeline:
         self._recent_replies = recent_replies
         self._fragment_troll = fragment_troll
         self._completeness = completeness
+        self._manager_reply_repo = manager_reply_repo
 
     async def handle(self, msg: IncomingMessage) -> PipelineDecision:
         # === ИЕРАРХИЯ ПРОВЕРОК (см. документацию архитектуры) ===
@@ -1075,9 +1078,23 @@ class Pipeline:
             complex_info=complex_info, msg=msg, cls=cls,
             reply_text=decision.reply_text, prior_context=prior_context,
         )
-        await self._notifier.send_notification_to_chat(
+        mid = await self._notifier.send_notification_to_chat(
             chat_id=complex_info.escalation_chat_id, text=text,
         )
+        # Сохраняем уведомление в notification_map — управляющий сможет ответить
+        # реплаем на это сообщение, и бот подхватит его ответ.
+        if mid and self._manager_reply_repo is not None:
+            try:
+                await self._manager_reply_repo.save_notification(
+                    notif_mid=mid,
+                    notif_chat_id=complex_info.escalation_chat_id,
+                    complex_id=complex_info.id,
+                    resident_chat_id=msg.chat_id,
+                    resident_mid=msg.message_id,
+                    resident_name=msg.user_name,
+                )
+            except Exception as exc:
+                log.warning("pipeline.notif_map_save_failed", error=str(exc))
 
     async def _handle_spam(
         self,

@@ -344,6 +344,53 @@ async def _m10_quotas_and_chat(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _m11_manager_reply_flow(conn: aiosqlite.Connection) -> None:
+    """Manager Reply Flow — отслеживание уведомлений + черновики ответов управляющего.
+
+    notification_map — маппинг mid уведомлений/карточек в чате «Обращения»
+    на контекст исходного сообщения жильца. Позволяет боту понять, на какое
+    обращение отвечает управляющий, когда пишет реплай на уведомление.
+
+    manager_reply_drafts — черновики ответов управляющего: хранит оригинальный
+    текст, форматированный AI-вариант и статус (PENDING / SENT_* / SUPERSEDED).
+    """
+    await conn.execute("""
+        CREATE TABLE notification_map (
+            notif_mid        TEXT PRIMARY KEY,
+            notif_chat_id    INTEGER NOT NULL,
+            complex_id       TEXT NOT NULL,
+            resident_chat_id INTEGER NOT NULL,
+            resident_mid     TEXT NOT NULL,
+            resident_name    TEXT,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notifmap_chat "
+        "ON notification_map(notif_chat_id)"
+    )
+    await conn.execute("""
+        CREATE TABLE manager_reply_drafts (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            notif_mid        TEXT NOT NULL,
+            notif_chat_id    INTEGER NOT NULL,
+            complex_id       TEXT NOT NULL,
+            resident_chat_id INTEGER NOT NULL,
+            resident_mid     TEXT NOT NULL,
+            manager_text     TEXT NOT NULL,
+            formatted_text   TEXT,
+            status           TEXT NOT NULL DEFAULT 'PENDING',
+            choice_card_mid  TEXT,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+            sent_at          TEXT
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_drafts_notif "
+        "ON manager_reply_drafts(notif_mid, status)"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _m1_escalations,
     _m2_logs_and_cache,
@@ -355,6 +402,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _m8_modes_and_global,
     _m9_trolling_strikes_and_bans,
     _m10_quotas_and_chat,
+    _m11_manager_reply_flow,
 )
 
 

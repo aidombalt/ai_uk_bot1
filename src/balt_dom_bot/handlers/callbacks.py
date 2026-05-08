@@ -18,12 +18,15 @@ from balt_dom_bot.handlers.sender import MaxBotEscalationSender, MaxBotReplySend
 from balt_dom_bot.log import get_logger
 from balt_dom_bot.services.escalation import render_resolved_card
 from balt_dom_bot.storage.escalations import EscalationRepo, EscalationStatus
+from balt_dom_bot.storage.manager_reply_repo import DraftStatus, ManagerReplyRepo
 from balt_dom_bot.storage.message_log import MessageLog
 
 log = get_logger(__name__)
 
 PREFIX_APPROVE = "e:a:"
 PREFIX_IGNORE = "e:i:"
+PREFIX_MR_FORMATTED = "mr:f:"
+PREFIX_MR_ORIGINAL = "mr:o:"
 
 
 def register_callback_handlers(
@@ -38,6 +41,7 @@ def register_callback_handlers(
     global_settings: Any = None,
     bans: Any = None,            # BansRepo
     moderator: Any = None,       # Moderator (для разбана)
+    manager_reply_repo: ManagerReplyRepo | None = None,
 ) -> None:
     @dp.message_callback()
     async def on_callback(event: Any) -> None:  # type: ignore[no-untyped-def]
@@ -97,6 +101,34 @@ def register_callback_handlers(
                 )
             except Exception as exc:
                 log.exception("admin_callback.crash", error=str(exc), payload=payload)
+            return
+
+        # Manager Reply: отправить форматированный вариант.
+        if payload.startswith(PREFIX_MR_FORMATTED):
+            draft_id = _parse_id(payload[len(PREFIX_MR_FORMATTED):])
+            if draft_id is None:
+                return
+            await _handle_manager_reply(
+                event, draft_id=draft_id, send_formatted=True,
+                manager_reply_repo=manager_reply_repo,
+                reply_sender=reply_sender,
+                escalation_sender=escalation_sender,
+                message_log=message_log,
+            )
+            return
+
+        # Manager Reply: отправить оригинал.
+        if payload.startswith(PREFIX_MR_ORIGINAL):
+            draft_id = _parse_id(payload[len(PREFIX_MR_ORIGINAL):])
+            if draft_id is None:
+                return
+            await _handle_manager_reply(
+                event, draft_id=draft_id, send_formatted=False,
+                manager_reply_repo=manager_reply_repo,
+                reply_sender=reply_sender,
+                escalation_sender=escalation_sender,
+                message_log=message_log,
+            )
             return
 
         log.warning("callback.unknown_payload", payload=payload)
@@ -287,6 +319,88 @@ async def _resend_status(
         await admin_cmd._send_with_buttons(event.bot, int(chat_id), body, kb_rows)
     except Exception as exc:
         log.warning("admin_callback.resend_failed", error=str(exc))
+
+
+async def _handle_manager_reply(
+    event: Any,
+    *,
+    draft_id: int,
+    send_formatted: bool,
+    manager_reply_repo: ManagerReplyRepo | None,
+    reply_sender: MaxBotReplySender,
+    escalation_sender: MaxBotEscalationSender,
+    message_log: MessageLog | None,
+) -> None:
+    """Обрабатывает нажатие «Отправить форматированный / Отправить оригинал»."""
+    if manager_reply_repo is None:
+        await _safe_answer(event, "Сервис ответов управляющего недоступен.")
+        return
+
+    draft = await manager_reply_repo.get_draft(draft_id)
+    if draft is None:
+        await _safe_answer(event, "Черновик не найден.")
+        return
+    if draft.status != DraftStatus.PENDING:
+        await _safe_answer(event, f"Уже обработано: {draft.status.value}.")
+        return
+
+    text_to_send = (
+        (draft.formatted_text or draft.manager_text) if send_formatted
+        else draft.manager_text
+    )
+
+    # Отправляем ответ жильцу в чат ЖК
+    await reply_sender.send_reply(
+        chat_id=draft.resident_chat_id,
+        text=text_to_send,
+        reply_to_mid=draft.resident_mid,
+    )
+
+    # Атомарно меняем статус (идемпотентно при двойном нажатии)
+    status = DraftStatus.SENT_FORMATTED if send_formatted else DraftStatus.SENT_ORIGINAL
+    sent = await manager_reply_repo.mark_sent(draft_id, status)
+    if not sent:
+        # Уже отправлено другим нажатием — молча завершаем
+        await _safe_answer(event, "Уже отправлено.")
+        return
+
+    # Логируем
+    if message_log is not None:
+        try:
+            await message_log.log_reply(
+                complex_id=draft.complex_id,
+                chat_id=draft.resident_chat_id,
+                in_reply_to=draft.resident_mid,
+                text=text_to_send,
+                source="manager_approved",  # совместимо с существующим типом
+            )
+        except Exception as exc:
+            log.warning("manager_reply_cb.log_failed", error=str(exc))
+
+    # Заменяем карточку выбора финальным сообщением без кнопок
+    variant = "форматированный ✅" if send_formatted else "оригинал 📝"
+    final_text = (
+        f"✅ Ответ отправлен в чат ЖК\n"
+        f"─────\n"
+        f"Вариант: {variant}\n"
+        f"«{text_to_send}»"
+    )
+    if draft.choice_card_mid:
+        await escalation_sender.resolve_escalation_card(
+            chat_id=draft.notif_chat_id,
+            old_message_id=draft.choice_card_mid,
+            text=final_text,
+        )
+
+    log.info(
+        "manager_reply_cb.sent",
+        draft_id=draft_id,
+        send_formatted=send_formatted,
+        complex_id=draft.complex_id,
+        resident_chat_id=draft.resident_chat_id,
+    )
+    label = "форматированный" if send_formatted else "оригинал"
+    await _safe_answer(event, f"✅ Ответ ({label}) отправлен жильцу.")
 
 
 def _parse_id(s: str) -> int | None:

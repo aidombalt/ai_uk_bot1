@@ -34,6 +34,7 @@ from balt_dom_bot.services.yandex_gpt import build_yandex_gpt_client
 from balt_dom_bot.storage.complexes_repo import ComplexesRepo
 from balt_dom_bot.storage.db import Database
 from balt_dom_bot.storage.escalations import EscalationRepo
+from balt_dom_bot.storage.manager_reply_repo import ManagerReplyRepo
 from balt_dom_bot.storage.message_log import MessageLog
 from balt_dom_bot.storage.prompts_repo import PromptProvider, PromptsRepo
 from balt_dom_bot.storage.users_repo import UsersRepo
@@ -116,6 +117,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     prompts_repo = PromptsRepo(db)
     prompt_provider = PromptProvider(prompts_repo, ttl_seconds=30.0)
     users_repo = UsersRepo(db)
+    manager_reply_repo = ManagerReplyRepo(db)
 
     # Seed: ЖК из YAML и админ из env
     seeded = await complexes_repo.seed_from_yaml(cfg.complexes)
@@ -143,7 +145,11 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
 
     reply_sender = MaxBotReplySender(bot)
     escalation_sender = MaxBotEscalationSender(bot)
-    escalator = Escalator(sender=escalation_sender, repo=esc_repo)
+    escalator = Escalator(
+        sender=escalation_sender,
+        repo=esc_repo,
+        manager_reply_repo=manager_reply_repo,
+    )
 
     # Moderator — опциональная авто-модерация мата. Включается per-ЖК.
     from balt_dom_bot.services.cooldown import CooldownManager
@@ -210,6 +216,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     from balt_dom_bot.services.fragment_troll import FragmentTrollDetector
     from balt_dom_bot.services.quota_manager import QuotaManager
     from balt_dom_bot.services.recent_reply_tracker import RecentReplyTracker
+    from balt_dom_bot.services.reply_formatter import ReplyFormatter
     from balt_dom_bot.storage.chat_mode_repo import ChatModeRepo
     quota = QuotaManager(db)
     chat_mode_repo = ChatModeRepo(db)
@@ -218,6 +225,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     recent_replies = RecentReplyTracker()
     fragment_troll = FragmentTrollDetector()
     completeness = CompletenessChecker(prompt_provider=prompt_provider)
+    reply_formatter = ReplyFormatter(gpt=gpt, gpt_cfg=cfg.yandex_gpt)
 
     pipeline = Pipeline(
         cfg=cfg, classifier=classifier, responder=responder,
@@ -234,15 +242,26 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
         recent_replies=recent_replies,
         fragment_troll=fragment_troll,
         completeness=completeness,
+        manager_reply_repo=manager_reply_repo,
+    )
+
+    from balt_dom_bot.handlers.manager_reply import ManagerReplyHandler
+    manager_reply_handler = ManagerReplyHandler(
+        complexes=complexes_repo,
+        manager_reply_repo=manager_reply_repo,
+        reply_formatter=reply_formatter,
+        escalation_sender=escalation_sender,
+        bot=bot,
     )
 
     register_lifecycle_handlers(dp, cfg)
-    register_message_handlers(dp, pipeline)
+    register_message_handlers(dp, pipeline, manager_reply_handler=manager_reply_handler)
     register_callback_handlers(
         dp, repo=esc_repo, reply_sender=reply_sender,
         escalation_sender=escalation_sender, message_log=msg_log, cfg=cfg,
         complexes=complexes_repo, global_settings=global_settings,
         bans=bans_repo, moderator=moderator,
+        manager_reply_repo=manager_reply_repo,
     )
 
     # Seed дефолтных промтов в БД при старте, чтобы они появились в GUI сразу

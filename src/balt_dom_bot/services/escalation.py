@@ -12,11 +12,14 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from balt_dom_bot.log import get_logger
 from balt_dom_bot.models import Classification, ComplexInfo, IncomingMessage, PipelineDecision
 from balt_dom_bot.storage.escalations import EscalationRepo, EscalationStatus
+
+if TYPE_CHECKING:
+    from balt_dom_bot.storage.manager_reply_repo import ManagerReplyRepo
 
 log = get_logger(__name__)
 
@@ -139,9 +142,16 @@ def render_resolved_card(
 
 
 class Escalator:
-    def __init__(self, *, sender: MessageSender, repo: EscalationRepo):
+    def __init__(
+        self,
+        *,
+        sender: MessageSender,
+        repo: EscalationRepo,
+        manager_reply_repo: "ManagerReplyRepo | None" = None,
+    ):
         self._sender = sender
         self._repo = repo
+        self._manager_reply_repo = manager_reply_repo
 
     async def escalate(
         self,
@@ -196,6 +206,20 @@ class Escalator:
                 chat_mid = mid
                 chat_card_chat_id = complex_info.escalation_chat_id
                 delivered_via.append("chat")
+                # Сохраняем в notification_map: управляющий сможет ответить
+                # реплаем на эту карточку, и бот подхватит ответ.
+                if self._manager_reply_repo is not None:
+                    try:
+                        await self._manager_reply_repo.save_notification(
+                            notif_mid=mid,
+                            notif_chat_id=complex_info.escalation_chat_id,
+                            complex_id=complex_info.id,
+                            resident_chat_id=incoming.chat_id,
+                            resident_mid=incoming.message_id,
+                            resident_name=incoming.user_name,
+                        )
+                    except Exception as exc:
+                        log.warning("escalator.notif_map_save_failed", error=str(exc))
 
         # 2b. Личка управляющего.
         if complex_info.escalate_to_manager and complex_info.manager_chat_id:

@@ -255,6 +255,54 @@ class MaxBotEscalationSender:
                 mid=manager_message_id, error=str(exc), error_type=type(exc).__name__,
             )
 
+    async def send_manager_reply_choice(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        draft_id: int,
+        has_formatted: bool,
+    ) -> str | None:
+        """Карточка выбора варианта ответа управляющего (formatted vs original)."""
+        try:
+            from maxapi.types.attachments.buttons import CallbackButton  # type: ignore[import-not-found]
+            from maxapi.utils.inline_keyboard import InlineKeyboardBuilder  # type: ignore[import-not-found]
+
+            kb = InlineKeyboardBuilder()
+            buttons = []
+            if has_formatted:
+                buttons.append(
+                    CallbackButton(
+                        text="✅ Отправить форматированный",
+                        payload=f"mr:f:{draft_id}",
+                    )
+                )
+            buttons.append(
+                CallbackButton(
+                    text="📝 Отправить оригинал",
+                    payload=f"mr:o:{draft_id}",
+                )
+            )
+            kb.row(*buttons)
+            sent = await self._bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                attachments=[kb.as_markup()],
+            )
+            mid = _extract_mid(sent)
+            log.info(
+                "manager_reply_choice.sent",
+                chat_id=chat_id, draft_id=draft_id, mid=mid,
+            )
+            return mid
+        except Exception as exc:
+            log.warning(
+                "manager_reply_choice.failed",
+                chat_id=chat_id, draft_id=draft_id,
+                error=str(exc), error_type=type(exc).__name__,
+            )
+            return None
+
     async def resolve_escalation_card(
         self,
         *,
