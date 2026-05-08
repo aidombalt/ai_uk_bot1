@@ -55,8 +55,12 @@ class MaxBotReplySender:
 
     async def send_reply(self, *, chat_id: int, text: str, reply_to_mid: str | None) -> None:
         try:
-            await self._bot.send_message(chat_id=chat_id, text=text)
-            log.info("reply.sent", chat_id=chat_id, chars=len(text))
+            link = None
+            if reply_to_mid:
+                from maxapi.types.message import MessageLinkType, NewMessageLink  # type: ignore[import-not-found]
+                link = NewMessageLink(type=MessageLinkType.REPLY, mid=reply_to_mid)
+            await self._bot.send_message(chat_id=chat_id, text=text, link=link)
+            log.info("reply.sent", chat_id=chat_id, chars=len(text), reply_to_mid=reply_to_mid)
         except Exception as exc:
             log.exception("reply.failed", chat_id=chat_id, error=str(exc))
 
