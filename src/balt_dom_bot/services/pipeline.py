@@ -708,26 +708,14 @@ class Pipeline:
                 # Fallback на обычный responder, чтобы жилец не остался без ответа.
                 use_chat_mode = False
 
-        if not use_chat_mode and not is_silent_char and not quota_exceeded:
-            try:
-                proposed_reply = await self._responder.respond(
-                    classification=cls,
-                    original_text=msg.text,
-                    complex_info=complex_info,
-                )
-            except Exception as exc:
-                log.exception("pipeline.responder_crash", error=str(exc))
-                decision = decision.model_copy(
-                    update={"escalate": True, "escalation_reason": "llm_error"}
-                )
-
-        # Completeness check: если в заявке нет деталей местоположения (парадная,
-        # квартира, этаж) — добавляем уточняющий вопрос к ответу.
-        # Не применяем для: chat-mode (у него своя логика), silent_chars,
-        # quota_exceeded, high_urgency (для аварий немедленная эскалация важнее).
+        # Completeness check: запускаем ДО responder'а — нужно знать заранее,
+        # нужно ли запрашивать детали. Если нужно — передаём инструкцию в LLM
+        # через manager_context, чтобы он сгенерировал ОДИН цельный ответ
+        # (без противоречия «обращение передано» + «уточните парадную»).
+        # Не применяем для: chat-mode, silent_chars, quota, high_urgency.
+        _clarification_ctx: str | None = None
         if (
-            proposed_reply is not None
-            and self._completeness is not None
+            self._completeness is not None
             and not use_chat_mode
             and not is_silent_char
             and not quota_exceeded
@@ -736,9 +724,17 @@ class Pipeline:
             try:
                 _cr = await self._completeness.check(msg.text, cls)
                 if _cr.needs_clarification:
-                    proposed_reply = f"{proposed_reply}\n\n{_cr.clarification_question}"
+                    _clarification_ctx = (
+                        "ИНСТРУКЦИЯ: в сообщении жильца отсутствуют ключевые детали "
+                        "(номер парадной/подъезда, квартира или этаж). "
+                        "НЕ пиши что «обращение уже передано специалистам» — "
+                        "сначала нужны детали. "
+                        "Вместо этого: ответь на информационную часть вопроса (если она есть), "
+                        "а в конце попроси уточнить: "
+                        f"{_cr.clarification_question}"
+                    )
                     log.info(
-                        "pipeline.completeness_clarification",
+                        "pipeline.completeness_clarification_needed",
                         missing=_cr.missing,
                         user_id=msg.user_id,
                         chat_id=msg.chat_id,
@@ -747,6 +743,20 @@ class Pipeline:
                     )
             except Exception as exc:
                 log.warning("pipeline.completeness_check_failed", error=str(exc))
+
+        if not use_chat_mode and not is_silent_char and not quota_exceeded:
+            try:
+                proposed_reply = await self._responder.respond(
+                    classification=cls,
+                    original_text=msg.text,
+                    complex_info=complex_info,
+                    manager_context=_clarification_ctx,
+                )
+            except Exception as exc:
+                log.exception("pipeline.responder_crash", error=str(exc))
+                decision = decision.model_copy(
+                    update={"escalate": True, "escalation_reason": "llm_error"}
+                )
 
         if is_silent_char:
             decision = decision.model_copy(update={"reply_text": None})
