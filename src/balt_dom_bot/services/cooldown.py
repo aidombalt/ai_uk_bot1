@@ -37,6 +37,10 @@ class CooldownManager:
     ) -> None:
         self._replies: dict[tuple[int, int], deque[float]] = {}
         self._escalations: dict[tuple[int, int], float] = {}
+        # Когда cooldown был активирован → молчим до этого времени.
+        # Без этого поля cooldown сбрасывается через 60с после последнего ответа,
+        # не соблюдая cooldown_minutes.
+        self._cooldown_until: dict[tuple[int, int], float] = {}
         # Счётчик off-topic сообщений с упоминанием бота (троллинг-детектор).
         # Отдельный от обычного cooldown — здесь нам важно НЕ время с последнего
         # ответа, а сколько раз юзер тегнул бота, не получая ответа.
@@ -60,21 +64,35 @@ class CooldownManager:
     def should_silence_reply(self, *, chat_id: int, user_id: int | None) -> bool:
         """Если True — бот не должен отвечать (юзер в cooldown).
 
-        Логика: смотрим сколько раз бот отвечал этому юзеру за последнюю минуту.
-        Если ≥ replies_per_minute → cooldown активен на cooldown_minutes от
-        последнего ответа.
+        Два режима:
+        1. Активный cooldown-период: cooldown уже был активирован и ещё не истёк.
+           Молчим до cooldown_until[key].
+        2. Rate-trigger: ≥ replies_per_minute ответов за последнюю минуту →
+           активируем cooldown на cooldown_minutes вперёд.
         """
         if user_id is None:
             return False
         now = self._now()
         key = (chat_id, user_id)
+
+        # Режим 1: проверяем явный cooldown-период
+        silence_until = self._cooldown_until.get(key, 0.0)
+        if now < silence_until:
+            log.info(
+                "cooldown.silence_reply",
+                chat_id=chat_id, user_id=user_id,
+                remaining_s=int(silence_until - now),
+            )
+            return True
+
+        # Режим 2: rate-check — ≥2 ответов за последние 60 секунд
         dq = self._prune_replies(key, now)
         if not dq:
             return False
-        # Считаем ответы за последнюю минуту
         last_minute = now - 60
         recent = sum(1 for t in dq if t >= last_minute)
         if recent >= self._replies_per_minute:
+            self._cooldown_until[key] = now + self._cooldown_seconds
             log.info(
                 "cooldown.silence_reply",
                 chat_id=chat_id, user_id=user_id,
@@ -160,4 +178,5 @@ class CooldownManager:
         """Сброс всех счётчиков (для тестов или ручного сброса в GUI)."""
         self._replies.clear()
         self._escalations.clear()
+        self._cooldown_until.clear()
         log.info("cooldown.reset")
