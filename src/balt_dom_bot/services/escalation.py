@@ -125,7 +125,9 @@ def render_card(
         f"Оригинал: «{incoming.text}»"
         f"{moderation_line}"
         f"{context_block}"
-        f"{proposed_block}"
+        f"{proposed_block}\n"
+        f"─────────────────\n"
+        f"↩️ Чтобы написать жильцу своими словами — пришлите реплай на это сообщение."
     )
 
 

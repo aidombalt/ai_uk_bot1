@@ -166,7 +166,9 @@ def _format_auto_reply_notification(
         f"{context_block}"
         f"📝 «{msg.text}»\n"
         f"─────\n"
-        f"✅ {reply_text}"
+        f"✅ {reply_text}\n"
+        f"─────\n"
+        f"↩️ Чтобы написать жильцу — пришлите реплай на это сообщение."
     )
 
 
