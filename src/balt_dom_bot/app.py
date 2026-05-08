@@ -206,6 +206,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     # Daily quota + chat-mode — новые сервисы для интеллектуальной защиты.
     from balt_dom_bot.services.chat_context import ChatContextManager
     from balt_dom_bot.services.chat_responder import ChatResponder
+    from balt_dom_bot.services.completeness_checker import CompletenessChecker
     from balt_dom_bot.services.fragment_troll import FragmentTrollDetector
     from balt_dom_bot.services.quota_manager import QuotaManager
     from balt_dom_bot.services.recent_reply_tracker import RecentReplyTracker
@@ -216,6 +217,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     chat_context = ChatContextManager()
     recent_replies = RecentReplyTracker()
     fragment_troll = FragmentTrollDetector()
+    completeness = CompletenessChecker(prompt_provider=prompt_provider)
 
     pipeline = Pipeline(
         cfg=cfg, classifier=classifier, responder=responder,
@@ -231,6 +233,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
         chat_context=chat_context,
         recent_replies=recent_replies,
         fragment_troll=fragment_troll,
+        completeness=completeness,
     )
 
     register_lifecycle_handlers(dp, cfg)
@@ -245,10 +248,12 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     # Seed дефолтных промтов в БД при старте, чтобы они появились в GUI сразу
     # (а не только после первого использования pipeline).
     from balt_dom_bot.prompts.classifier import CLASSIFIER_SYSTEM_PROMPT
+    from balt_dom_bot.prompts.completeness import DEFAULT_CLARIFICATION_QUESTION
     from balt_dom_bot.prompts.responder import RESPONDER_SYSTEM_PROMPT
     try:
         await prompts_repo.get_or_seed("classifier_system", CLASSIFIER_SYSTEM_PROMPT)
         await prompts_repo.get_or_seed("responder_system", RESPONDER_SYSTEM_PROMPT)
+        await prompts_repo.get_or_seed("completeness_clarification", DEFAULT_CLARIFICATION_QUESTION)
     except Exception as exc:
         log.warning("app.prompts_seed_failed", error=str(exc))
 

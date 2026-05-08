@@ -100,7 +100,11 @@ class FaqFirstResponder:
                 return cached
 
         # 3) FAQ-fast-path.
-        tpl = find_template(cls.theme, original_text)
+        # FAQ-шаблоны написаны для жалоб/сообщений о факте («замечание принято»,
+        # «заявка передана»). Для QUESTION они неуместны — жилец задаёт вопрос,
+        # а не подаёт жалобу. LLM даст более подходящий ответ.
+        _skip_faq = cls.character == Character.QUESTION
+        tpl = None if _skip_faq else find_template(cls.theme, original_text)
         if tpl is not None and manager_context is None:
             text = format_template(
                 tpl,

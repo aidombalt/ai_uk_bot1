@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from balt_dom_bot.handlers.sender import MaxBotEscalationSender
     from balt_dom_bot.services.chat_context import ChatContextManager
     from balt_dom_bot.services.chat_responder import ChatResponder
+    from balt_dom_bot.services.completeness_checker import CompletenessChecker
     from balt_dom_bot.services.cooldown import CooldownManager
     from balt_dom_bot.services.fragment_troll import FragmentTrollDetector
     from balt_dom_bot.services.moderator import Moderator
@@ -189,6 +190,7 @@ class Pipeline:
         chat_context: "ChatContextManager | None" = None,
         recent_replies: "RecentReplyTracker | None" = None,
         fragment_troll: "FragmentTrollDetector | None" = None,
+        completeness: "CompletenessChecker | None" = None,
     ):
         self._cfg = cfg
         self._classifier = classifier
@@ -207,6 +209,7 @@ class Pipeline:
         self._chat_context = chat_context
         self._recent_replies = recent_replies
         self._fragment_troll = fragment_troll
+        self._completeness = completeness
 
     async def handle(self, msg: IncomingMessage) -> PipelineDecision:
         # === ИЕРАРХИЯ ПРОВЕРОК (см. документацию архитектуры) ===
@@ -717,6 +720,33 @@ class Pipeline:
                 decision = decision.model_copy(
                     update={"escalate": True, "escalation_reason": "llm_error"}
                 )
+
+        # Completeness check: если в заявке нет деталей местоположения (парадная,
+        # квартира, этаж) — добавляем уточняющий вопрос к ответу.
+        # Не применяем для: chat-mode (у него своя логика), silent_chars,
+        # quota_exceeded, high_urgency (для аварий немедленная эскалация важнее).
+        if (
+            proposed_reply is not None
+            and self._completeness is not None
+            and not use_chat_mode
+            and not is_silent_char
+            and not quota_exceeded
+            and decision.escalation_reason != "high_urgency"
+        ):
+            try:
+                _cr = await self._completeness.check(msg.text, cls)
+                if _cr.needs_clarification:
+                    proposed_reply = f"{proposed_reply}\n\n{_cr.clarification_question}"
+                    log.info(
+                        "pipeline.completeness_clarification",
+                        missing=_cr.missing,
+                        user_id=msg.user_id,
+                        chat_id=msg.chat_id,
+                        theme=cls.theme.value,
+                        character=cls.character.value,
+                    )
+            except Exception as exc:
+                log.warning("pipeline.completeness_check_failed", error=str(exc))
 
         if is_silent_char:
             decision = decision.model_copy(update={"reply_text": None})

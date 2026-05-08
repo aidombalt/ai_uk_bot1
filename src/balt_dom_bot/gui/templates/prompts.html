@@ -4,7 +4,9 @@
 <h3 class="mb-3">Системные промты</h3>
 <div class="alert alert-info small">
   Изменения подхватываются на лету (TTL-кэш ~30 секунд). Имя записи определяет, какой компонент её использует:
-  <code>classifier_system</code> — классификатор, <code>responder_system</code> — генератор ответов.
+  <code>classifier_system</code> — классификатор,
+  <code>responder_system</code> — генератор ответов,
+  <code>completeness_clarification</code> — уточняющий вопрос, добавляемый к ответу когда в заявке нет деталей местоположения (парадная, квартира, этаж).
 </div>
 {% for p in items %}
 <div class="card mb-3">
