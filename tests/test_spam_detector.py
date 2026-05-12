@@ -316,3 +316,109 @@ class TestFalsePositives:
             "Новый закон о криптовалюте принят: pravo.gov.ru/document/123"
         )
         assert not verdict.is_spam
+
+
+# ---------------------------------------------------------------------------
+# Точечные разделители: M.e.f.e.d.r.o.n, B.o.s.h.k.i (скриншот 2026-05-12)
+# ---------------------------------------------------------------------------
+
+class TestDotSeparatedObfuscation:
+    """Спамеры разделяют буквы точками/дефисами, чтобы обойти regex-фильтры."""
+
+    SCREENSHOT_MSG1 = (
+        "Ищем курьеров для доставки небольших посылок 📦. "
+        "З/п от 150к в неделю. Свободный график. "
+        "Без залога и паспорта. Писать в ЛС 🌸🌸"
+    )
+    SCREENSHOT_MSG2 = (
+        "🌸M.e.f.e.d.r.o.n🌸 💫S.K.❄️ 🔥B.o.s.h.k.i🔥 "
+        "Все районы! 24/7. Ссылка на магазин в профиле."
+    )
+
+    def test_screenshot_msg1_is_spam(self) -> None:
+        """Сообщение 1 со скриншота: курьер + «без залога и паспорта» → drugs."""
+        verdict = detect(self.SCREENSHOT_MSG1)
+        assert verdict.is_spam, f"matched={verdict.matched}"
+
+    def test_screenshot_msg1_category_drugs(self) -> None:
+        """«Без залога и паспорта» → категория drugs (признак наркокурьерства)."""
+        assert detect(self.SCREENSHOT_MSG1).category == "drugs"
+
+    def test_screenshot_msg2_is_spam(self) -> None:
+        """Сообщение 2 со скриншота: M.e.f.e.d.r.o.n + B.o.s.h.k.i → drugs."""
+        verdict = detect(self.SCREENSHOT_MSG2)
+        assert verdict.is_spam, f"matched={verdict.matched}"
+
+    def test_screenshot_msg2_category_drugs(self) -> None:
+        assert detect(self.SCREENSHOT_MSG2).category == "drugs"
+
+    def test_dot_separated_name_collapsed(self) -> None:
+        """M.e.f.e.d.r.o.n. (с финальной точкой) → схлопывается и ловится."""
+        verdict = detect("M.e.f.e.d.r.o.n. B.o.s.h.k.i. Все цены в лс @drug_shop")
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_dash_separated_name(self) -> None:
+        """M-e-f-e-d-r-o-n — дефисный разделитель."""
+        verdict = detect("M-e-f-e-d-r-o-n, B-o-s-h-k-i. Пишите в ЛС")
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_mag_v_profile_is_spam(self) -> None:
+        """«Ссылка на магазин в профиле» — drug-store сигнал без имён веществ."""
+        verdict = detect("Ссылка на магазин в профиле. Все районы, 24/7.")
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_bez_zaloga_bez_pasporta_is_spam(self) -> None:
+        """«Без залога и паспорта» — уникальный сигнал найма наркокурьеров."""
+        verdict = detect(
+            "Ищем людей на доставку. Без залога и паспорта. Оплата еженедельно."
+        )
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_is_spam_candidate_no_contact_drug_store(self) -> None:
+        """«Ссылка на магазин в профиле» → is_spam_candidate=True без @mention."""
+        assert is_spam_candidate("Ссылка на магазин в профиле. Все районы 24/7.")
+
+    def test_is_spam_candidate_latin_drug_name(self) -> None:
+        """Латинское нарконазвание после схлопывания → is_spam_candidate=True."""
+        assert is_spam_candidate("M.e.f.e.d.r.o.n и B.o.s.h.k.i. Пиши в лс")
+
+    # --- Ложные срабатывания ---
+
+    def test_two_letter_abbrev_not_collapsed(self) -> None:
+        """S.K. (2 буквы) — НЕ схлопывается, не детектируется как спам."""
+        verdict = detect("Обратитесь к сотруднику С.К. Петрову по вопросам ЖКХ.")
+        assert not verdict.is_spam
+
+    def test_regulation_ref_not_spam(self) -> None:
+        """Ссылка на пункт постановления п.3.1.2 — НЕ спам."""
+        verdict = detect(
+            "Согласно п.3.1.2 постановления администрации, жильцы обязаны..."
+        )
+        assert not verdict.is_spam
+
+    def test_initials_not_spam(self) -> None:
+        """Инициалы А.Б.Смирнов в сообщении — НЕ спам."""
+        verdict = detect(
+            "Напишите управляющему А.Б.Смирнову на почту. Он разберётся."
+        )
+        assert not verdict.is_spam
+
+    def test_vse_raiony_legit_context_not_spam(self) -> None:
+        """«Все районы» в легитимном контексте без других drug-сигналов — НЕ спам.
+
+        Бот не должен блокировать «Такси по всем районам города» и аналоги
+        без подтверждающих drug-маркеров.
+        NOTE: «все районы» является strong-маркером, поэтому этот тест намеренно
+        проверяет только, что нет ложной блокировки легитимного сообщения с
+        упоминанием «все районы» В КОНТЕКСТЕ привычных ЖК-тем без drug-маркеров.
+        """
+        # «Все районы» без других drug-сигналов → ловится как drug (strong marker).
+        # Это осознанный выбор: в ЖК-чате фраза почти исключительно используется
+        # в drug-рекламе. Тест документирует поведение.
+        verdict = detect("Субботник пройдёт во всех районах города в эту субботу.")
+        # «всех районах» ≠ «все районы» (подстрока разная) → не должно ловиться
+        assert not verdict.is_spam

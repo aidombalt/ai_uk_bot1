@@ -150,9 +150,15 @@ class TestParseVerdict:
         assert v.is_spam
         assert v.category == "earn"
 
-    def test_parse_error_returns_safe_false(self) -> None:
+    def test_short_non_json_treated_as_likely_refusal(self) -> None:
+        # Поведение намеренно изменено: короткий не-JSON ≤ 300 символов без
+        # известных фрагментов отказа всё равно трактуется как вероятный отказ
+        # (is_spam=True). YandexGPT при нормальной работе возвращает JSON;
+        # технические ошибки API попадают в SpamLLMChecker.check() как исключения
+        # (→ api_error → is_spam=False), а не как короткие текстовые ответы.
         v = _parse_verdict("это не json вообще")
-        assert not v.is_spam  # технический сбой (не отказ) → fail-safe
+        assert v.is_spam
+        assert v.reason == "llm_likely_refused"
 
     def test_empty_string_returns_safe_false(self) -> None:
         v = _parse_verdict("")
@@ -176,6 +182,44 @@ class TestParseVerdict:
         raw = json.dumps({"is_spam": True, "category": "earn", "reason": long_reason})
         v = _parse_verdict(raw)
         assert len(v.reason) <= 120
+
+    # --- Новые паттерны отказа YandexGPT ---
+
+    def test_yandex_refusal_ne_prednaznachen(self) -> None:
+        """«Не предназначен для» — наблюдаемый шаблон YandexGPT."""
+        v = _parse_verdict("Я не предназначен для классификации подобного контента.")
+        assert v.is_spam
+        assert v.reason == "llm_refused"
+
+    def test_yandex_refusal_danaya_tema(self) -> None:
+        """«Данная тема» — краткий отказ без явных ключевых слов."""
+        v = _parse_verdict("Данная тема не входит в сферу моей компетенции.")
+        assert v.is_spam
+        assert v.reason == "llm_refused"
+
+    def test_yandex_refusal_protivorechit(self) -> None:
+        """«Противоречит» — формулировка safety-отказа."""
+        v = _parse_verdict("Ответ на этот запрос противоречит моим принципам безопасности.")
+        assert v.is_spam
+        assert v.reason == "llm_refused"
+
+    def test_short_non_json_likely_refusal(self) -> None:
+        """Короткий не-JSON без известных слов → вероятный отказ → is_spam=True."""
+        v = _parse_verdict("К сожалению, я не могу обработать данный текст.")
+        assert v.is_spam
+
+    def test_long_non_json_parse_error(self) -> None:
+        """Длинный не-JSON (300+ символов) → технический сбой → is_spam=False."""
+        long_text = "Привет! " * 50  # > 300 символов, не JSON
+        v = _parse_verdict(long_text)
+        assert not v.is_spam
+        assert v.reason == "parse_error"
+
+    def test_empty_string_still_safe_false(self) -> None:
+        """Пустой ответ → технический сбой → is_spam=False."""
+        v = _parse_verdict("")
+        assert not v.is_spam
+        assert v.reason == "empty_response"
 
 
 # ---------------------------------------------------------------------------
