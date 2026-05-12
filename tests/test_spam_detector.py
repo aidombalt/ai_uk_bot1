@@ -407,6 +407,11 @@ class TestDotSeparatedObfuscation:
         )
         assert not verdict.is_spam
 
+    def test_5k_rubles_per_day_not_spam_without_contact(self) -> None:
+        """«5к рублей в день» без способа связи — не спам (некому отвечать)."""
+        verdict = detect("Обсуждали, что можно зарабатывать по 5к рублей в день")
+        assert not verdict.is_spam
+
     def test_vse_raiony_legit_context_not_spam(self) -> None:
         """«Все районы» в легитимном контексте без других drug-сигналов — НЕ спам.
 
@@ -422,3 +427,65 @@ class TestDotSeparatedObfuscation:
         verdict = detect("Субботник пройдёт во всех районах города в эту субботу.")
         # «всех районах» ≠ «все районы» (подстрока разная) → не должно ловиться
         assert not verdict.is_spam
+
+
+# ---------------------------------------------------------------------------
+# «Нашёл баг в боте» — схема скама с легитимизирующим нарративом
+# ---------------------------------------------------------------------------
+
+class TestBugScamPattern:
+    """Скам с нарративом «случайно нашёл баг» + «выводить по Nк рублей» + «скину в лс».
+
+    Сообщение прошло фильтры 2026-05-12 из-за двух пробелов в _INCOME_RE:
+    1) однозначное число «5» не проходило 3-значный паттерн
+    2) слово «рублей» между «к» и «в» разрывало паттерн.
+    """
+
+    BUG_SCAM = (
+        "Соседи, привет! Я тут случайно нашел баг в одном боте, "
+        "можно выводить по 5к рублей в день. "
+        "Кому интересно, скину инструкцию в лс, пока не прикрыли 😅"
+    )
+
+    def test_bug_scam_is_spam(self) -> None:
+        """Реальное сообщение из логов 2026-05-12 → детектируется как спам."""
+        verdict = detect(self.BUG_SCAM)
+        assert verdict.is_spam, f"matched={verdict.matched}"
+
+    def test_bug_scam_category_earn(self) -> None:
+        """«5к рублей в день» + «в лс» → категория earn (income-pattern + contact)."""
+        verdict = detect(self.BUG_SCAM)
+        assert verdict.category == "earn"
+
+    def test_bug_scam_is_candidate(self) -> None:
+        """is_spam_candidate() тоже возвращает True — LLM был бы вызван как backup."""
+        assert is_spam_candidate(self.BUG_SCAM)
+
+    def test_income_rubli_pattern_10k(self) -> None:
+        """«10к рублей в день» + LS-контакт → earn (вторая альтернатива _INCOME_RE)."""
+        verdict = detect("Узнай как зарабатывать 10к рублей в день, пиши в лс!")
+        assert verdict.is_spam
+        assert verdict.category == "earn"
+
+    def test_income_rubli_pattern_50k(self) -> None:
+        """«50к рублей в сутки» + @mention → earn."""
+        verdict = detect("Реальный доход 50к рублей в сутки @earn_bot подробности там")
+        assert verdict.is_spam
+        assert verdict.category == "earn"
+
+    def test_income_rubli_no_contact_not_spam(self) -> None:
+        """«5к рублей в день» без контакта — не спам (спамер не оставил связь)."""
+        verdict = detect("Слышал, что некоторые зарабатывают по 5к рублей в день")
+        assert not verdict.is_spam
+
+    def test_soft_word_rubli_triggers_candidate_with_ls(self) -> None:
+        """«рублей в день» в тексте + «в лс» → is_spam_candidate=True (belt-and-suspenders)."""
+        assert is_spam_candidate(
+            "можно получать 5к рублей в день, подробности в лс"
+        )
+
+    def test_ls_alone_no_income_still_not_candidate(self) -> None:
+        """«В лс» без дохода/коммерческих слов → не кандидат (нет сигнала)."""
+        assert not is_spam_candidate(
+            "Кто потерял котёнка на 3 этаже — напишите в лс"
+        )
