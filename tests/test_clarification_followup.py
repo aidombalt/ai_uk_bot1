@@ -146,9 +146,19 @@ class _FakeResponder:
     def __init__(self, reply: str = "Ответ бота") -> None:
         self._reply = reply
         self.call_count = 0
+        self.last_manager_context: str | None = None
 
-    async def respond(self, *, classification: Any, original_text: str, complex_info: Any, **_: Any) -> str:
+    async def respond(
+        self,
+        *,
+        classification: Any,
+        original_text: str,
+        complex_info: Any,
+        manager_context: str | None = None,
+        **_: Any,
+    ) -> str:
         self.call_count += 1
+        self.last_manager_context = manager_context
         return self._reply
 
 
@@ -399,4 +409,81 @@ def test_completeness_checker_pending_isolated_per_user() -> None:
     assert not checker.is_pending(CHAT_ID, USER_ID)
     assert checker.is_pending(CHAT_ID, OTHER_USER_ID), (
         "Очистка USER_ID не должна затрагивать OTHER_USER_ID"
+    )
+
+
+# ---------------------------------------------------------------------------
+# G: no-greeting instruction injected on clarification follow-up
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clarification_followup_no_repeated_greeting() -> None:
+    """Responder получает no-greeting инструкцию, когда отвечает на уточняющий ответ.
+
+    Баг: после completeness_clarification_needed responder вызывался с
+    manager_context=None, LLM следовал системному промту и снова здоровался.
+    Фикс: pipeline инжектирует «НЕ начинай с Здравствуйте» в manager_context.
+    """
+    completeness = CompletenessChecker()
+
+    cls_initial = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
+    cls_followup = _make_cls(
+        character=Character.QUESTION,
+        addressed_to=AddressedTo.UNCLEAR,
+        urgency=Urgency.LOW,
+    )
+
+    responder = _FakeResponder(reply="Принято, спасибо!")
+    pipeline, reply_sender = _build_pipeline(
+        _FakeClassifier([cls_initial, cls_followup]),
+        completeness=completeness,
+        responder=responder,
+    )
+
+    # Шаг 1: первое сообщение → completeness ставит pending
+    await pipeline.handle(_make_msg("Нам поменяли в субботу один коврик который у входа чистый, тот что у лифта грязный"))
+    assert completeness.is_pending(CHAT_ID, USER_ID)
+
+    # Сбрасываем счётчик контекста чтобы проверить именно второй вызов
+    responder.last_manager_context = None
+
+    # Шаг 2: ответ жильца → _awaiting_clarification=True → no-greeting инжект
+    await pipeline.handle(_make_msg("Первая парадная"))
+
+    assert responder.last_manager_context is not None, (
+        "manager_context должен содержать no-greeting инструкцию"
+    )
+    assert "не начинай" in responder.last_manager_context.lower() or "не начинай" in responder.last_manager_context.lower(), (
+        "manager_context должен запрещать повторное приветствие"
+    )
+    assert "здравствуйте" in responder.last_manager_context.lower(), (
+        "manager_context должен явно упоминать запрещённое приветствие"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_greeting_injection_without_pending_is_absent() -> None:
+    """Без _awaiting_clarification no-greeting инструкция НЕ инжектируется.
+
+    Регрессия: обычные обращения должны получать пустой manager_context.
+    """
+    completeness = CompletenessChecker()
+
+    cls_uc = _make_cls(character=Character.COMPLAINT_MILD, addressed_to=AddressedTo.UC)
+
+    responder = _FakeResponder(reply="Ответ бота")
+    pipeline, _ = _build_pipeline(
+        _FakeClassifier([cls_uc]),
+        completeness=completeness,
+        responder=responder,
+    )
+
+    await pipeline.handle(_make_msg("Лифт не работает уже 3 дня, подъезд 2, кв. 15"))
+
+    # Контекст может быть None или содержать completeness-инструкцию,
+    # но НЕ должен содержать no-greeting текст.
+    ctx = responder.last_manager_context or ""
+    assert "продолжение диалога" not in ctx, (
+        "no-greeting инструкция не должна инжектироваться без _awaiting_clarification"
     )

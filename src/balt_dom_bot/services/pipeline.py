@@ -830,6 +830,22 @@ class Pipeline:
             except Exception as exc:
                 log.warning("pipeline.completeness_check_failed", error=str(exc))
 
+        # Clarification follow-up: жилец уже получил приветствие в предыдущем
+        # сообщении. Вставляем инструкцию "не здоровайся снова", чтобы responder
+        # не начинал ответ с «Здравствуйте!» во второй раз.
+        if _awaiting_clarification:
+            _no_greeting = (
+                "КОНТЕКСТ: это уточняющий ответ жильца на вопрос бота. "
+                "Жилец уже был поприветствован в предыдущем сообщении. "
+                "НЕ начинай ответ с «{Имя}, здравствуйте!» или «Здравствуйте!» — "
+                "это продолжение диалога."
+            )
+            _clarification_ctx = (
+                _no_greeting + " " + _clarification_ctx
+                if _clarification_ctx
+                else _no_greeting
+            )
+
         if not use_chat_mode and not is_silent_char and not quota_exceeded:
             try:
                 proposed_reply = await self._responder.respond(
