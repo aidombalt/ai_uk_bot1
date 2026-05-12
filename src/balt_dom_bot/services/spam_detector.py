@@ -156,6 +156,14 @@ _URL_RE = re.compile(
 )
 _MENTION_RE = re.compile(r"@\w{3,32}")
 _PHONE_RE = re.compile(r"(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}")
+# «Пиши/напиши в лс/личку» — функциональный аналог @упоминания: спамер даёт
+# способ связи через личные сообщения вместо хэндла. Только в спаме; жильцы
+# пишут «напишите мне» или «отвечу лично», не «пиши в лс».
+_LS_RE = re.compile(
+    r'(?:пиш|напиш)\w{0,5}\s+(?:мне\s+)?в\s+(?:лс\b|личку\b|личные\b)'
+    r'|\bв\s+(?:лс\b|личку\b)',
+    re.IGNORECASE | re.UNICODE,
+)
 
 
 # === BLACKLIST: жаргон наркотиков (strong) ===================================
@@ -272,6 +280,15 @@ def _is_whitelisted(domain: str) -> bool:
     return False
 
 
+def _has_drug_emoji_pair(text: str) -> bool:
+    """True если оба кодовых наркотических эмодзи присутствуют в тексте.
+
+    ❄ (U+2744, снежинка) = кокаин/мет,  🍁 (U+1F341, кленовый лист) = каннабис.
+    Вместе — почти исключительно drug-delivery спам.
+    """
+    return '❄' in text and '🍁' in text
+
+
 def _count_matches(text_lc: str, markers: tuple[str, ...]) -> list[str]:
     return [m for m in markers if m in text_lc]
 
@@ -332,6 +349,24 @@ def detect(text: str) -> SpamVerdict:
         else:
             other_urls.append(u)
 
+    # 2b. Наркотические эмодзи-пара ❄️+🍁 + любой рабочий/доходный контекст.
+    #     Жильцы крайне редко используют оба этих эмодзи вместе; в drug-спаме —
+    #     стандартный «бренд» (снежинка=кокаин, лист=каннабис).
+    if _has_drug_emoji_pair(text):
+        _de_income = _INCOME_RE.search(text_lc) or _INCOME_RE.search(norm_lc)
+        _de_ctx = any(
+            w in norm_lc
+            for w in ("доставк", "курьер", "свободн", "без опыта", "оплат", "заработ", "доход")
+        )
+        _de_contact = (
+            _MENTION_RE.search(text) or _PHONE_RE.search(text) or _LS_RE.search(text)
+        )
+        if _de_income or _de_ctx or _de_contact:
+            return SpamVerdict(
+                is_spam=True, category="drugs", confidence=0.90,
+                matched=["❄+🍁"], safe_links=safe_urls,
+            )
+
     # 3. Подсчёт маркеров категорий (оригинал + нормализованный).
     crypto = _count_matches_either(text_lc, norm_lc, _CRYPTO_MARKERS)
     earn = _count_matches_either(text_lc, norm_lc, _EARN_MARKERS)
@@ -377,7 +412,9 @@ def detect(text: str) -> SpamVerdict:
     #    (латинская О как ноль: «15Ок»). Нормализация «0»→«о» меняет цифры на
     #    буквы, поэтому нужны оба варианта.
     _income_hit = _INCOME_RE.search(text_lc) or _INCOME_RE.search(norm_lc)
-    if _income_hit and _MENTION_RE.search(text):
+    if _income_hit and (
+        _MENTION_RE.search(text) or _PHONE_RE.search(text) or _LS_RE.search(text)
+    ):
         m = _income_hit
         return SpamVerdict(
             is_spam=True, category="earn", confidence=0.83,
@@ -454,7 +491,8 @@ def is_spam_candidate(text: str) -> bool:
     """
     has_mention = bool(_MENTION_RE.search(text))
     has_phone   = bool(_PHONE_RE.search(text))
-    if not (has_mention or has_phone):
+    has_ls      = bool(_LS_RE.search(text))   # «Пиши в лс/личку» — контакт без хэндла
+    if not (has_mention or has_phone or has_ls):
         return False
 
     norm = _normalize_obfuscated(text).lower()

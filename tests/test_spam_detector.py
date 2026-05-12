@@ -230,6 +230,44 @@ class TestNewSpamPatterns:
         norm = _normalize_obfuscated("100к/неделю")
         assert "100к" in norm, f"Число 100 не должно изменяться: {norm!r}"
 
+    def test_ls_income_detected_directly(self) -> None:
+        """«100k в неделю» + «Пиши в лс» → rule 8 ловит без @mention."""
+        verdict = detect(
+            "Ищешь работу? Свободный график, з/п от 100k в неделю. Без опыта. Пиши в лс!"
+        )
+        assert verdict.is_spam
+        assert verdict.category == "earn"
+
+    def test_drug_emoji_pair_with_context_detected(self) -> None:
+        """❄️+🍁 + 'доставка' → rule 2b → drugs."""
+        verdict = detect("Только ❄️ и 🍁. Доставка по городу. Оплата криптой @HR_best_work")
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_drug_emoji_pair_with_income_and_ls_detected(self) -> None:
+        """Точный текст со скриншота: обфускация + ❄️🍁 + «в лс» → детектируется."""
+        text = (
+            "«Ищeшь pa6oту? 💸 Интepecные квecты по гopoду! "
+            "Cвoбодный гpaфик, з/п от 100k в неделю. Без опыта. Пиши в лс! ❄️🍁🔥»"
+        )
+        verdict = detect(text)
+        assert verdict.is_spam, f"category={verdict.category}, matched={verdict.matched}"
+
+    def test_drug_emoji_alone_no_context_not_spam(self) -> None:
+        """❄️+🍁 без коммерческого контекста → не спам."""
+        verdict = detect("❄️ зима пришла, 🍁 осень прошла, всем тепла!")
+        assert not verdict.is_spam
+
+    def test_ls_candidate_triggers(self) -> None:
+        """«Пиши в лс» + «доход»/«без опыта» → is_spam_candidate True."""
+        assert is_spam_candidate(
+            "з/п от 100к в неделю, без опыта, пиши в лс"
+        )
+
+    def test_ls_alone_without_commercial_not_candidate(self) -> None:
+        """«В лс» без коммерческих слов → не кандидат."""
+        assert not is_spam_candidate("Кто нашёл ключи — напишите в лс, очень нужно")
+
 
 # ---------------------------------------------------------------------------
 # Ложные срабатывания: обычные сообщения жильцов

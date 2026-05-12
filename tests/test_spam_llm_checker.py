@@ -105,6 +105,14 @@ class TestIsSpamCandidate:
         text = "Тpебyются кyрьеры!!! 3п от 100k в день. Свободный график, без опыта. Тел: +7(999)000-00-01"
         assert is_spam_candidate(text)
 
+    def test_ls_contact_plus_income_candidate(self) -> None:
+        """«Пиши в лс» + income → кандидат (нет @mention и телефона)."""
+        assert is_spam_candidate("з/п от 100к в неделю, без опыта, пиши в лс!")
+
+    def test_ls_without_commercial_not_candidate(self) -> None:
+        """«Напишите в лс» без коммерческих слов → не кандидат."""
+        assert not is_spam_candidate("Кто нашёл ключи от машины — напишите в лс")
+
 
 # ---------------------------------------------------------------------------
 # _parse_verdict(): разбор JSON-ответа LLM
