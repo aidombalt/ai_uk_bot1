@@ -46,11 +46,15 @@ class TestNormalizeObfuscated:
         result = _normalize_obfuscated("р а б о т ы").lower()
         assert "работы" in result
 
-    def test_spaced_word_not_collapsed_on_short_seq(self) -> None:
-        # Последовательность из 3 символов НЕ должна склеиваться ({3,} означает ≥4)
-        result = _normalize_obfuscated("а б в")
-        # три одиночных символа остаются как есть
-        assert result == "а б в"
+    def test_spaced_word_not_collapsed_on_two_chars(self) -> None:
+        # Двухсимвольная последовательность НЕ должна склеиваться ({2,} означает ≥3)
+        result = _normalize_obfuscated("а б")
+        assert result == "а б"
+
+    def test_spaced_word_three_chars_collapsed(self) -> None:
+        # Трёхсимвольная последовательность СХЛОПЫВАЕТСЯ (нужно для «М е ф» → «Меф»)
+        result = _normalize_obfuscated("М е ф")
+        assert result == "Меф"
 
     def test_full_spam_sample_normalized(self) -> None:
         spam = (
@@ -489,6 +493,62 @@ class TestBugScamPattern:
         assert not is_spam_candidate(
             "Кто потерял котёнка на 3 этаже — напишите в лс"
         )
+
+
+# ---------------------------------------------------------------------------
+# Спейс-обфускация: «М е ф», «❄️», «в тг» (скриншот 2026-05-12 16:39)
+# ---------------------------------------------------------------------------
+
+class TestSpacedDrugAbbrDetection:
+    """«🌿 C к о р о с т ь ❄️ M e ф пишите в тг!» — три слоя обфускации."""
+
+    SCREENSHOT_MSG = "🌿 C k o p o c т ь ❄️ M e ф пишите в тг!"
+
+    def test_screenshot_msg_is_spam(self) -> None:
+        """Реальное сообщение из логов 2026-05-12 16:39 → is_spam=True."""
+        verdict = detect(self.SCREENSHOT_MSG)
+        assert verdict.is_spam, f"matched={verdict.matched}"
+
+    def test_screenshot_msg_category_drugs(self) -> None:
+        """«М е ф» после схлопывания → категория drugs."""
+        assert detect(self.SCREENSHOT_MSG).category == "drugs"
+
+    def test_mef_spaced_collapses(self) -> None:
+        """«М е ф» (3 символа) схлопывается в «Меф» при нормализации."""
+        from balt_dom_bot.services.spam_detector import _normalize_obfuscated
+        result = _normalize_obfuscated("М е ф")
+        assert result == "Меф"
+
+    def test_mef_three_chars_detected_as_drug(self) -> None:
+        """«М е ф» с контактом → detect() ловит без LLM."""
+        verdict = detect("М е ф пишите в лс @dealer")
+        assert verdict.is_spam
+        assert verdict.category == "drugs"
+
+    def test_tg_contact_extends_ls_re(self) -> None:
+        """«Пишите в тг» — Telegram-контакт, функциональный аналог «в лс»."""
+        assert is_spam_candidate("работа курьером, пишите в тг")
+
+    def test_v_telegram_contact(self) -> None:
+        """«В телеграм» тоже распознаётся как контакт-сигнал."""
+        assert is_spam_candidate("вакансия, оплата ежедневно, пиши в телеграм")
+
+    def test_snowflake_emoji_with_tg_contact_is_candidate(self) -> None:
+        """❄️ + «в тг» → is_spam_candidate=True (belt-and-suspenders)."""
+        assert is_spam_candidate("❄️ товар отличный, пишите в тг")
+
+    def test_snowflake_without_contact_not_candidate(self) -> None:
+        """❄️ без способа связи → не кандидат."""
+        assert not is_spam_candidate("❄️ зима пришла, у нас снег")
+
+    def test_tg_without_commercial_not_candidate(self) -> None:
+        """«В тг» без коммерческих сигналов и ❄️ → не кандидат."""
+        assert not is_spam_candidate("Есть вопрос по лифту — напишите в тг нашей группы")
+
+    def test_two_char_spaced_not_collapsed(self) -> None:
+        """Двухсимвольная последовательность «а б» не схлопывается."""
+        from balt_dom_bot.services.spam_detector import _normalize_obfuscated
+        assert _normalize_obfuscated("а б") == "а б"
 
 
 # ---------------------------------------------------------------------------
