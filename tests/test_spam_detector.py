@@ -62,12 +62,22 @@ class TestNormalizeObfuscated:
         assert "шишки" in result
 
     def test_latin_k_to_cyrillic_k(self) -> None:
-        # д0ставkу → доставку (Latin k → к, digit 0 → о)
+        # д0ставkу → доставку (Latin k → к; digit 0 между кириллицей → о)
         assert "доставку" in _normalize_obfuscated("д0ставkу").lower()
 
-    def test_digit_zero_to_o(self) -> None:
-        # д0ставка → доставка
+    def test_digit_zero_to_o_between_cyrillic(self) -> None:
+        # д0ставка → доставка (0 между кириллическими символами → о)
         assert "доставка" in _normalize_obfuscated("д0ставка").lower()
+
+    def test_digit_zero_preserved_in_numbers(self) -> None:
+        # 100к/неделю — цифры не должны переводиться в буквы
+        result = _normalize_obfuscated("100к/неделю")
+        assert "100к" in result, f"Число 100 не должно изменяться, получено: {result!r}"
+
+    def test_vodoschetchiков_obfuscation(self) -> None:
+        # В0Д0СЧЕТЧИК0В (0 как буква о между кириллицей) → ВОДОСЧЕТЧИКОВ
+        result = _normalize_obfuscated("В0Д0СЧЕТЧИК0В").lower()
+        assert "водосчетчик" in result
 
     def test_euro_sign_to_e(self) -> None:
         # Тр€буются → Требуются
@@ -176,30 +186,49 @@ class TestObfuscationTechniques:
 
 
 class TestNewSpamPatterns:
-    """Реальный спам из логов 2026-05-12 (второй паттерн — п@ботниkи)."""
+    """Реальный спам из логов 2026-05-12."""
 
-    SPAM_TEXT = (
+    OBFUSC_SPAM_TEXT = (
         "Тр€буются p@ботниkи н@ д0ставkу! "
         "3П от 15Ок в мecяц. Бeз oпытa. "
         "Пиcaть в тг @rabota_dostavka"
     )
+    WATER_METER_SPAM = (
+        "Установка В0Д0СЧЕТЧИК0В! Акция до конца недели. "
+        "Пломбировка в подарок. Пишите в ЛС или звоните +7(999)123-45-67"
+    )
+    COURIER_PHONE_SPAM = (
+        "Тpебyются кyрьеры!!! 3п от 100k в день. "
+        "Свободный гpaфик, бeз опытa. "
+        "Писать в ЛС -> @manager_tg"
+    )
 
-    def test_is_spam(self) -> None:
-        verdict = detect(self.SPAM_TEXT)
+    def test_obfusc_spam_is_spam(self) -> None:
+        verdict = detect(self.OBFUSC_SPAM_TEXT)
         assert verdict.is_spam, (
-            f"Спам с новыми техниками обфускации должен быть обнаружен. "
             f"category={verdict.category}, matched={verdict.matched}"
         )
 
-    def test_category_earn(self) -> None:
-        verdict = detect(self.SPAM_TEXT)
-        assert verdict.category == "earn"
+    def test_obfusc_spam_category_earn(self) -> None:
+        assert detect(self.OBFUSC_SPAM_TEXT).category == "earn"
 
-    def test_is_spam_candidate_triggers(self) -> None:
-        """is_spam_candidate должна запускать LLM-проверку для этого сообщения."""
-        assert is_spam_candidate(self.SPAM_TEXT), (
-            "Обфусцированный рекрутинговый спам должен быть кандидатом для LLM"
+    def test_obfusc_spam_candidate_triggers(self) -> None:
+        assert is_spam_candidate(self.OBFUSC_SPAM_TEXT)
+
+    def test_water_meter_candidate_triggers(self) -> None:
+        """Реклама водосчётчиков с телефоном → LLM-кандидат."""
+        assert is_spam_candidate(self.WATER_METER_SPAM), (
+            "Реклама с телефоном + В0Д (script mix) должна быть кандидатом"
         )
+
+    def test_courier_phone_spam_candidate(self) -> None:
+        """Курьерский спам с @handle → LLM-кандидат."""
+        assert is_spam_candidate(self.COURIER_PHONE_SPAM)
+
+    def test_100k_in_numbers_not_corrupted(self) -> None:
+        """Цифра 0 в числах должна сохраняться, не превращаясь в букву о."""
+        norm = _normalize_obfuscated("100к/неделю")
+        assert "100к" in norm, f"Число 100 не должно изменяться: {norm!r}"
 
 
 # ---------------------------------------------------------------------------

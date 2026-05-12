@@ -79,9 +79,31 @@ class TestIsSpamCandidate:
         assert is_spam_candidate("ЗП от 15Ок в месяц, пиши @job_channel")
 
     def test_script_mix_no_mention_not_candidate(self) -> None:
-        """Обфускация БЕЗ @упоминания (нет @handle) → не кандидат для LLM."""
-        # Нет символа @ совсем → _MENTION_RE не срабатывает → не кандидат
+        """Обфускация БЕЗ @упоминания и БЕЗ телефона → не кандидат для LLM."""
         assert not is_spam_candidate("Тр€буются на доставку, звоните по тел 123-456")
+
+    # --- Новые тесты: телефон как канал контакта ---
+
+    def test_phone_plus_script_mix_candidate(self) -> None:
+        """В0Д0СЧЕТЧИК0В (script mix) + телефон → кандидат."""
+        text = "Установка В0Д0СЧЕТЧИК0В! Акция до конца недели. Звоните +7(999)123-45-67"
+        assert is_spam_candidate(text), "Реклама с номером телефона + обфускация должна быть кандидатом"
+
+    def test_phone_plus_commercial_word_candidate(self) -> None:
+        """Телефон + «акция» → кандидат (коммерческая реклама)."""
+        assert is_spam_candidate("Пломбировка счётчиков в подарок! Звоните +7(800)555-00-11")
+
+    def test_phone_without_commercial_signal_not_candidate(self) -> None:
+        """Телефон в легитимном контексте (горячая линия) → не кандидат."""
+        # Нет коммерческих слов, нет script mixing, нет income
+        assert not is_spam_candidate(
+            "Горячая линия управляющей компании: 8-800-100-10-10"
+        )
+
+    def test_phone_plus_courier_earn_candidate(self) -> None:
+        """Телефон + «курьеры 100k в день» → кандидат (реальный спам из логов)."""
+        text = "Тpебyются кyрьеры!!! 3п от 100k в день. Свободный график, без опыта. Тел: +7(999)000-00-01"
+        assert is_spam_candidate(text)
 
 
 # ---------------------------------------------------------------------------
