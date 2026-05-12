@@ -21,6 +21,56 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 
+# === НОРМАЛИЗАЦИЯ ОБФУСЦИРОВАННОГО ТЕКСТА ====================================
+# Спамеры заменяют кириллические буквы визуально похожими латинскими (а→a,
+# с→c, е→e, о→o, р→p, х→x) и цифрами (б→6), разбивают слова пробелами
+# («р а б о т ы»), прячут слова за эмодзи («🍁шишкu🍁»).
+# Перед проверкой маркеров нормализуем текст в «чистую» кириллицу.
+
+# Таблица: латинский гомоглиф / цифра → кириллица
+_HOMOGLYPH_TABLE: dict[int, str] = {
+    # строчные
+    ord('a'): 'а', ord('c'): 'с', ord('e'): 'е',
+    ord('o'): 'о', ord('p'): 'р', ord('x'): 'х',
+    ord('y'): 'у', ord('u'): 'и',   # шишкu → шишки
+    # прописные
+    ord('A'): 'А', ord('B'): 'В', ord('C'): 'С',
+    ord('E'): 'Е', ord('H'): 'Н', ord('K'): 'К',
+    ord('M'): 'М', ord('O'): 'О', ord('P'): 'Р',
+    ord('T'): 'Т', ord('X'): 'Х',
+    # цифровые замены
+    ord('6'): 'б',   # p a 6 o т ы → работы
+}
+
+# Диапазоны Unicode для emoji (покрывают ❄️ 🔥 📦 🍁 и большинство остальных)
+_EMOJI_RE = re.compile(
+    r"[\U00002600-\U000027BF"    # разные символы, кубики, стрелки
+    r"\U00002B00-\U00002BFF"     # разные стрелки
+    r"\U0001F000-\U0001F9FF"     # основные emoji-блоки
+    r"\U0001FA00-\U0001FA9F"     # доп. emoji
+    r"️⃣]+",           # variation selector, combining enclosing keycap
+    re.UNICODE,
+)
+
+# Склейка разбитых слов: 4+ одиночных символов через пробел → слово.
+# {3,} = «(пробел+символ)» повторяется ≥3 раза → всего ≥4 символа.
+# Порог 4 защищает от склейки обычных однобуквенных слов «а б».
+_SPACED_WORD_RE = re.compile(r'(?<!\S)\S(?: \S){3,}(?!\S)')
+
+
+def _normalize_obfuscated(text: str) -> str:
+    """Нормализует обфусцированный текст перед проверкой маркеров спама.
+
+    1. Латинские гомоглифы → кириллица (а→a, с→c и т.д.)
+    2. Emoji → пробел (🍁шишки🍁 → _шишки_)
+    3. Разбитые пробелами буквы → слово (р а б о т ы → работы)
+    """
+    result = text.translate(_HOMOGLYPH_TABLE)
+    result = _EMOJI_RE.sub(' ', result)
+    result = _SPACED_WORD_RE.sub(lambda m: m.group(0).replace(' ', ''), result)
+    return result
+
+
 # === WHITELIST: государственные и проверенные ресурсы ========================
 # Если в сообщении есть ссылка на эти домены (или их поддомены) — это сильный
 # сигнал, что пересылается легитимная информация (закон, новость комитета,
@@ -99,6 +149,7 @@ _PHONE_RE = re.compile(r"(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\
 _DRUG_MARKERS: tuple[str, ...] = (
     # Опиаты, стимуляторы (общий сленг)
     "соли соль", "соль кристал",  # требуем уточняющий контекст для "соль"
+    "кристалл",  # слэнг мефедрона/первитина; «кристальный» пишется с ь — не совпадает
     "мефедрон", "амфетамин", "метамфетамин", "метадон", "героин",
     "кокаин", " кокс ", "лсд", "lsd", "экстази", "ecstasy",
     "мдма", "mdma", "кетамин",
@@ -134,6 +185,10 @@ _EARN_MARKERS: tuple[str, ...] = (
     "млм", "сетевой маркетинг",
     "приватная группа", "закрытый канал инвест",
     "обучение трейдингу", "научу зарабатывать",
+    # Типичные фразы объявлений о «курьерской» работе по доставке наркотиков
+    "оплата каждый",      # «оплата каждый день» / «оплата каждые сутки»
+    "ежедневная оплат",   # «ежедневная оплата»
+    "доход от 15",        # «доход от 150к в неделю» (150 = 15+0) и выше
 )
 
 # === Эзотерика / "услуги" =====================================================
@@ -206,11 +261,25 @@ def _count_matches(text_lc: str, markers: tuple[str, ...]) -> list[str]:
     return [m for m in markers if m in text_lc]
 
 
+def _count_matches_either(
+    text_lc: str, norm_lc: str, markers: tuple[str, ...]
+) -> list[str]:
+    """Ищет маркеры в оригинальном ИЛИ нормализованном тексте.
+
+    Нормализованный текст ловит обфускацию (гомоглифы, пробелы в словах,
+    emoji-границы); оригинальный — прямые совпадения. Объединяем результаты.
+    """
+    return list({*_count_matches(text_lc, markers), *_count_matches(norm_lc, markers)})
+
+
 def detect(text: str) -> SpamVerdict:
     """Главный метод: анализирует текст и возвращает вердикт.
 
     Алгоритм (по порядку приоритета):
     1. Жаргон наркотиков → спам (drugs), даже одно совпадение.
+       Проверка ведётся по оригинальному И нормализованному тексту —
+       нормализация снимает обфускацию (латинские гомоглифы, emoji-границы,
+       разбитые пробелами слова).
     2. Извлекаем URL'ы. Если есть whitelist-ссылка — серьёзно повышаем планку
        (нужны strong-доказательства, чтобы это перебить).
     3. Криптовалютные/заработковые/эзо/коммерческие маркеры:
@@ -223,10 +292,11 @@ def detect(text: str) -> SpamVerdict:
     if not text or len(text) < 3:
         return SpamVerdict(is_spam=False)
 
-    text_lc = " " + text.lower() + " "  # рамки пробелов для подстрочного поиска
+    text_lc = " " + text.lower() + " "          # оригинал в нижнем регистре
+    norm_lc = " " + _normalize_obfuscated(text).lower() + " "  # нормализованный
 
     # 1. Наркотики — strong-сигнал, бан без вопросов.
-    drugs = _count_matches(text_lc, _DRUG_MARKERS)
+    drugs = _count_matches_either(text_lc, norm_lc, _DRUG_MARKERS)
     if drugs:
         return SpamVerdict(
             is_spam=True, category="drugs",
@@ -247,11 +317,11 @@ def detect(text: str) -> SpamVerdict:
         else:
             other_urls.append(u)
 
-    # 3. Подсчёт маркеров категорий.
-    crypto = _count_matches(text_lc, _CRYPTO_MARKERS)
-    earn = _count_matches(text_lc, _EARN_MARKERS)
-    esoteric = _count_matches(text_lc, _ESOTERIC_MARKERS)
-    commerce = _count_matches(text_lc, _COMMERCE_MARKERS)
+    # 3. Подсчёт маркеров категорий (оригинал + нормализованный).
+    crypto = _count_matches_either(text_lc, norm_lc, _CRYPTO_MARKERS)
+    earn = _count_matches_either(text_lc, norm_lc, _EARN_MARKERS)
+    esoteric = _count_matches_either(text_lc, norm_lc, _ESOTERIC_MARKERS)
+    commerce = _count_matches_either(text_lc, norm_lc, _COMMERCE_MARKERS)
 
     # 4. Подозрительные ссылки + хотя бы 1 рекламный маркер → спам.
     if suspicious_urls and (crypto or earn):
