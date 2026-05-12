@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from balt_dom_bot.services.moderator import Moderator
     from balt_dom_bot.services.quota_manager import QuotaManager
     from balt_dom_bot.services.recent_reply_tracker import RecentReplyTracker
+    from balt_dom_bot.services.spam_llm_checker import SpamLLMChecker
     from balt_dom_bot.storage.chat_mode_repo import ChatModeRepo
     from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     from balt_dom_bot.storage.global_settings_repo import GlobalSettingsRepo
@@ -195,6 +196,7 @@ class Pipeline:
         fragment_troll: "FragmentTrollDetector | None" = None,
         completeness: "CompletenessChecker | None" = None,
         manager_reply_repo: "ManagerReplyRepo | None" = None,
+        spam_llm: "SpamLLMChecker | None" = None,
     ):
         self._cfg = cfg
         self._classifier = classifier
@@ -215,6 +217,7 @@ class Pipeline:
         self._fragment_troll = fragment_troll
         self._completeness = completeness
         self._manager_reply_repo = manager_reply_repo
+        self._spam_llm = spam_llm
 
     async def handle(self, msg: IncomingMessage) -> PipelineDecision:
         # === ИЕРАРХИЯ ПРОВЕРОК (см. документацию архитектуры) ===
@@ -269,6 +272,34 @@ class Pipeline:
         # Защищён whitelist'ом (gov.spb.ru/pravo.gov.ru/dom.gosuslugi.ru/...) —
         # пересланный закон или ссылка на жилкомитет НЕ считаются спамом.
         spam_v = spam_detector.detect(msg.text)
+
+        # Второй слой — LLM-детектор для хитрого спама, который прошёл мимо regex:
+        # нестандартные формулировки («оплата от 100к/неделю»), новые паттерны.
+        # Запускается только при наличии мягких сигналов (@mention + коммерческие слова),
+        # чтобы не тратить токены на каждое сообщение жильца.
+        # Fail-safe: любая ошибка API → is_spam=False, основной pipeline не прерывается.
+        if not spam_v.is_spam and self._spam_llm is not None:
+            if spam_detector.is_spam_candidate(msg.text):
+                try:
+                    llm_v = await self._spam_llm.check(msg.text)
+                    if llm_v.is_spam:
+                        spam_v = spam_detector.SpamVerdict(
+                            is_spam=True,
+                            category=llm_v.category or "earn",
+                            confidence=0.85,
+                            matched=[f"LLM: {llm_v.reason}"] if llm_v.reason else ["llm_spam"],
+                        )
+                        log.warning(
+                            "pipeline.spam_llm_detected",
+                            category=spam_v.category,
+                            reason=llm_v.reason,
+                            confidence=spam_v.confidence,
+                            user_id=msg.user_id,
+                            preview=msg.text[:80],
+                        )
+                except Exception as exc:
+                    log.warning("pipeline.spam_llm_check_failed", error=str(exc))
+
         if spam_v.is_spam:
             log.warning(
                 "pipeline.spam_detected",

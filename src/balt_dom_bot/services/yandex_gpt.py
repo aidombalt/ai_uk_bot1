@@ -121,8 +121,12 @@ class StubYandexGptClient:
         max_tokens: int | None = None,
     ) -> str:
         system = next((m.text for m in messages if m.role == "system"), "")
-        user = next((m.text for m in reversed(messages) if m.role == "user"), "")
         log.debug("yandex_gpt.stub", role_count=len(messages), temperature=temperature)
+
+        # Детектор спама: маркер [SPAM_CHECK] уникален для spam_checker prompt.
+        # Возвращаем is_spam=false — заглушка не банит никого.
+        if "[SPAM_CHECK]" in system:
+            return '{"is_spam": false, "category": null, "reason": ""}'
 
         is_classifier = "JSON" in system or "классификатор" in system.lower()
         if is_classifier:

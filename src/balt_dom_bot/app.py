@@ -30,6 +30,7 @@ from balt_dom_bot.services.classifier import (
 from balt_dom_bot.services.escalation import Escalator
 from balt_dom_bot.services.pipeline import Pipeline
 from balt_dom_bot.services.responder import FaqFirstResponder
+from balt_dom_bot.services.spam_llm_checker import SpamLLMChecker
 from balt_dom_bot.services.yandex_gpt import build_yandex_gpt_client
 from balt_dom_bot.storage.complexes_repo import ComplexesRepo
 from balt_dom_bot.storage.db import Database
@@ -138,6 +139,10 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
         )
     classifier: Classifier = SafetyNetClassifier(primary_classifier)
 
+    # LLM-детектор спама: второй слой для хитрого спама, который прошёл мимо regex.
+    # При stub-режиме — всегда возвращает is_spam=False (см. StubYandexGptClient).
+    spam_llm = SpamLLMChecker(gpt=gpt, gpt_cfg=cfg.yandex_gpt)
+
     cache = _build_cache(cfg, db)
     responder = FaqFirstResponder(
         gpt=gpt, gpt_cfg=cfg.yandex_gpt, cache=cache, prompt_provider=prompt_provider,
@@ -243,6 +248,7 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
         fragment_troll=fragment_troll,
         completeness=completeness,
         manager_reply_repo=manager_reply_repo,
+        spam_llm=spam_llm,
     )
 
     from balt_dom_bot.handlers.manager_reply import ManagerReplyHandler

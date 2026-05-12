@@ -9,7 +9,12 @@
 
 import pytest
 
-from balt_dom_bot.services.spam_detector import SpamVerdict, _normalize_obfuscated, detect
+from balt_dom_bot.services.spam_detector import (
+    SpamVerdict,
+    _normalize_obfuscated,
+    detect,
+    is_spam_candidate,
+)
 
 
 # ---------------------------------------------------------------------------
