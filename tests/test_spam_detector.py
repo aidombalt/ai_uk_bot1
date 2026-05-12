@@ -489,3 +489,82 @@ class TestBugScamPattern:
         assert not is_spam_candidate(
             "Кто потерял котёнка на 3 этаже — напишите в лс"
         )
+
+
+# ---------------------------------------------------------------------------
+# Фишинг: мимикрия под официальные уведомления + URL-укорачиватели
+# ---------------------------------------------------------------------------
+
+class TestPhishingDetection:
+    """Фишинговые сообщения: «Управляющая компания / Госуслуги» + bit.ly."""
+
+    SCREENSHOT_PHISH = (
+        "Важно! Управляющая компания проводит голосование собственников "
+        "за установку шлагбаума. Проголосуйте через Госуслуги по ссылке: "
+        "http://bit.ly/fake-gosuslugi-dom"
+    )
+
+    def test_phishing_gosuslugi_shortener_is_spam(self) -> None:
+        """Реальное сообщение из логов 2026-05-12 → is_spam=True."""
+        verdict = detect(self.SCREENSHOT_PHISH)
+        assert verdict.is_spam, f"matched={verdict.matched}"
+
+    def test_phishing_gosuslugi_shortener_category(self) -> None:
+        """Фишинг категоризируется как ads (мошенническая реклама)."""
+        assert detect(self.SCREENSHOT_PHISH).category == "ads"
+
+    def test_phishing_gosuslugi_shortener_confidence(self) -> None:
+        """Confidence фишинга госуслуги+shortener ≥ 0.9."""
+        assert detect(self.SCREENSHOT_PHISH).confidence >= 0.9
+
+    def test_phishing_mfc_shortener(self) -> None:
+        """«МФЦ» + bit.ly → фишинг (МФЦ тоже имеет официальный сайт)."""
+        verdict = detect(
+            "Запись в МФЦ по новой системе. Перейдите: bit.ly/mfc-new-2026"
+        )
+        assert verdict.is_spam
+        assert verdict.category == "ads"
+
+    def test_phishing_cutt_ly(self) -> None:
+        """cutt.ly — другой популярный укорачиватель, тоже ловится."""
+        verdict = detect(
+            "Уважаемые собственники, голосование на Госуслугах: cutt.ly/vote-dom"
+        )
+        assert verdict.is_spam
+
+    def test_is_spam_candidate_shortener_alone(self) -> None:
+        """Один только bit.ly без госуслуг → не прямой бан, но LLM-кандидат."""
+        verdict = detect("Фото ремонта подъезда: bit.ly/photo123")
+        assert not verdict.is_spam  # нет authority claim → не баним
+        assert is_spam_candidate("Фото ремонта подъезда: bit.ly/photo123")
+
+    def test_is_spam_candidate_any_shortener(self) -> None:
+        """Любой укорачиватель → is_spam_candidate=True (LLM проверит контекст)."""
+        assert is_spam_candidate("Смотрите объявление: tinyurl.com/subbotnik")
+
+    def test_real_gosuslugi_link_not_spam(self) -> None:
+        """Настоящая ссылка gosuslugi.ru → не спам (whitelist)."""
+        verdict = detect(
+            "Проголосуйте за благоустройство: gosuslugi.ru/gkh/vote/12345"
+        )
+        assert not verdict.is_spam
+
+    def test_gosuslugi_text_no_link_not_spam(self) -> None:
+        """«Через Госуслуги» без ссылки → не спам (нет подозрительного URL)."""
+        verdict = detect(
+            "Подайте заявку через Госуслуги на перерасчёт коммунальных услуг"
+        )
+        assert not verdict.is_spam
+
+    def test_shortener_with_safe_url_not_banned(self) -> None:
+        """Shortener рядом с legit gosuslugi.ru → не баним (whitelist защищает)."""
+        verdict = detect(
+            "Официальный портал: gosuslugi.ru/dom и краткая ссылка: bit.ly/same"
+        )
+        assert not verdict.is_spam  # safe_url присутствует → phishing-check не срабатывает
+
+    def test_shortener_no_authority_is_candidate_not_banned(self) -> None:
+        """bit.ly без госуслуг/МФЦ → LLM-кандидат, но не прямой бан."""
+        text = "Присылаю bit.ly/article — интересная статья о ЖКХ"
+        assert not detect(text).is_spam  # нет authority → нет прямого бана
+        assert is_spam_candidate(text)   # но LLM проверит

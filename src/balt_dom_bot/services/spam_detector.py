@@ -287,6 +287,27 @@ _SUSPICIOUS_DOMAINS: frozenset[str] = frozenset({
     "stavka.com", "casino.com",
 })
 
+# Домены URL-укорачивателей: скрывают реальный адрес перехода.
+# В легитимных ЖК-уведомлениях почти не встречаются; в фишинге — стандартный приём.
+# Фишер пишет «Проголосуйте через Госуслуги» и прикладывает bit.ly вместо gosuslugi.ru.
+_URL_SHORTENERS: frozenset[str] = frozenset({
+    "bit.ly", "t.co", "tinyurl.com", "goo.gl",
+    "cutt.ly", "clck.ru", "vk.cc", "is.gd",
+    "ow.ly", "buff.ly", "rb.gy", "short.io",
+    "tiny.cc", "bl.ink", "soo.gd", "lnkd.in",
+})
+
+# Regex для поиска укорачивателей в тексте, не зависящий от TLD-списка _URL_RE.
+# _URL_RE не знает .ly/.cc/.gd, поэтому bit.ly/link без http:// не извлекается.
+# Lookbehind (?<!\w) предотвращает совпадение внутри слова («exhibit.ly» ≠ «bit.ly»).
+# Longest-first сортировка нужна для корректной работы re-альтернации.
+_SHORTENER_URL_RE = re.compile(
+    r'(?<!\w)(?:https?://)?(?:www\.)?(?:'
+    + '|'.join(re.escape(d) for d in sorted(_URL_SHORTENERS, key=len, reverse=True))
+    + r')(?:/\S*)?',
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class SpamVerdict:
@@ -402,6 +423,20 @@ def detect(text: str) -> SpamVerdict:
             suspicious_urls.append(u)
         else:
             other_urls.append(u)
+
+    # 2c. Фишинг: укорачиватель ссылки + упоминание государственного портала в тексте.
+    #     Настоящий gosuslugi.ru попал бы в safe_urls; если ссылка — bit.ly/cutt.ly,
+    #     а в тексте написано «Госуслуги» или «МФЦ» — это подмена домена.
+    #     Используем _SHORTENER_URL_RE, а не _extract_urls: у .ly/.cc/.gd нет в _URL_RE.
+    #     Защита: если в сообщении ТАКЖЕ есть настоящая whitelist-ссылка — не баним.
+    shortener_matches = _SHORTENER_URL_RE.findall(text)
+    if shortener_matches and not safe_urls:
+        if "госуслуг" in text_lc or "gosuslugi" in text_lc or "мфц" in text_lc:
+            return SpamVerdict(
+                is_spam=True, category="ads",
+                confidence=0.93,
+                matched=shortener_matches,
+            )
 
     # 2b. Наркотические эмодзи-пара ❄️+🍁 + любой рабочий/доходный контекст.
     #     Жильцы крайне редко используют оба этих эмодзи вместе; в drug-спаме —
@@ -575,6 +610,12 @@ def is_spam_candidate(text: str) -> bool:
     """
     norm = _normalize_obfuscated(text).lower()
     dotcol = _collapse_dotted(text).lower()
+
+    # Путь C: URL-укорачиватель → всегда нужна LLM-проверка.
+    # Укорачиватели (bit.ly, cutt.ly и т.п.) прячут реальный адрес; в ЖК-чате
+    # легитимных случаев мало, а фишинговых — много.
+    if _SHORTENER_URL_RE.search(text):
+        return True
 
     # Путь B: бесконтактные drug-store сигналы.
     # Проверяем в оригинале, dotcol и norm.
