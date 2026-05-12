@@ -144,11 +144,24 @@ class TestParseVerdict:
 
     def test_parse_error_returns_safe_false(self) -> None:
         v = _parse_verdict("это не json вообще")
-        assert not v.is_spam  # fail-safe: лучше пропустить чем ошибочно забанить
+        assert not v.is_spam  # технический сбой (не отказ) → fail-safe
 
     def test_empty_string_returns_safe_false(self) -> None:
         v = _parse_verdict("")
         assert not v.is_spam
+
+    def test_llm_safety_refusal_returns_spam_true(self) -> None:
+        """Явный отказ YandexGPT обсуждать → is_spam=True."""
+        refusal = "Я не могу обсуждать эту тему. Давайте поговорим о чём-нибудь ещё."
+        v = _parse_verdict(refusal)
+        assert v.is_spam, "Отказ LLM = контент подозрителен, не легитимное сообщение жильца"
+        assert v.reason == "llm_refused"
+
+    def test_llm_refusal_variant_returns_spam_true(self) -> None:
+        """Другой вариант отказа."""
+        v = _parse_verdict("Не могу помочь с этим запросом.")
+        assert v.is_spam
+        assert v.reason == "llm_refused"
 
     def test_reason_truncated_to_120(self) -> None:
         long_reason = "а" * 200
@@ -207,15 +220,28 @@ class TestSpamLLMChecker:
 
     @pytest.mark.asyncio
     async def test_normalized_text_passed_when_obfuscated(self, spam_checker) -> None:
-        """Если текст обфусцирован — LLM получает оба варианта."""
+        """Обфусцированный текст → LLM получает нормализованный вариант (не оригинал)."""
         checker, mock_gpt = spam_checker
         mock_gpt.complete.return_value = '{"is_spam": true, "category": "drugs", "reason": "тест"}'
         obfuscated = "Кpиcтaллы зaкaзывaйтe у нac @dealer_bot"
         await checker.check(obfuscated)
-        # Проверяем что в запросе к LLM присутствует нормализованный вариант
         call_args = mock_gpt.complete.call_args
         user_msg = call_args[0][0][-1].text  # последнее сообщение = user
-        assert "Нормализованный" in user_msg or "Кристаллы" in user_msg
+        # LLM видит нормализованный текст, не оригинал с гомоглифами
+        assert "Нормализованный" in user_msg
+        assert "Кристаллы" in user_msg    # нормализованное слово есть
+        assert "Кpиcтaллы" not in user_msg  # оригинал с гомоглифами НЕ передаётся
+
+    @pytest.mark.asyncio
+    async def test_drug_emoji_stripped_before_llm(self, spam_checker) -> None:
+        """❄️🍁 (emoji-маркеры наркотиков) убраны до отправки в LLM."""
+        checker, mock_gpt = spam_checker
+        mock_gpt.complete.return_value = '{"is_spam": true, "category": "earn", "reason": "тест"}'
+        text_with_emoji = "Только ❄️ и 🍁. Доставка. Оплата криптой @HR_best_work"
+        await checker.check(text_with_emoji)
+        user_msg = mock_gpt.complete.call_args[0][0][-1].text
+        assert "❄️" not in user_msg
+        assert "🍁" not in user_msg
 
     @pytest.mark.asyncio
     async def test_non_obfuscated_passes_single_form(self, spam_checker) -> None:

@@ -27,6 +27,20 @@ _JSON_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
 
 _VALID_CATEGORIES = frozenset({"drugs", "earn", "crypto", "esoteric", "ads"})
 
+# Фрагменты, характерные для отказа модели отвечать.
+# Отказ от ответа = контент, скорее всего, является подозрительным.
+_REFUSAL_FRAGMENTS: frozenset[str] = frozenset({
+    "не могу обсуждать",
+    "не могу помочь",
+    "не могу отвечать",
+    "не буду обсуждать",
+    "не стану обсуждать",
+    "это выходит за рамки",
+    "давайте поговорим о",
+    "давайте обсудим что",
+    "не могу выполнить",
+})
+
 
 @dataclass
 class SpamLLMVerdict:
@@ -36,7 +50,12 @@ class SpamLLMVerdict:
 
 
 def _parse_verdict(raw: str) -> SpamLLMVerdict:
-    """Разбирает JSON из ответа LLM. При любой ошибке → is_spam=False (safe)."""
+    """Разбирает JSON из ответа LLM.
+
+    Если LLM отказывается отвечать (safety refusal) → is_spam=True:
+    легитимные сообщения жильцов никогда не вызывают отказ модели.
+    При технических ошибках (пустой ответ, сломанный JSON) → is_spam=False.
+    """
     raw = raw.strip()
     # Убираем markdown-обёртку если есть
     if raw.startswith("```"):
@@ -44,6 +63,12 @@ def _parse_verdict(raw: str) -> SpamLLMVerdict:
         raw = raw[nl + 1:].rstrip("`").strip() if nl != -1 else raw[3:].rstrip("`").strip()
     m = _JSON_RE.search(raw)
     if m is None:
+        # Проверяем: отказ модели или технический сбой?
+        raw_lower = raw.lower()
+        if any(f in raw_lower for f in _REFUSAL_FRAGMENTS):
+            log.warning("spam_llm.safety_refusal", raw_preview=raw[:120])
+            # Отказ = контент подозрителен. Легитимные сообщения не вызывают отказов.
+            return SpamLLMVerdict(is_spam=True, reason="llm_refused")
         log.warning("spam_llm.parse_no_json", raw_preview=raw[:100])
         return SpamLLMVerdict(is_spam=False, reason="parse_error")
     try:
@@ -73,13 +98,18 @@ class SpamLLMChecker:
         self._cfg = gpt_cfg
 
     async def check(self, text: str) -> SpamLLMVerdict:
-        """Проверяет текст на спам. Fail-safe: ошибки API → is_spam=False."""
+        """Проверяет текст на спам. Fail-safe: ошибки API → is_spam=False.
+
+        LLM получает НОРМАЛИЗОВАННЫЙ текст: emoji убраны, гомоглифы заменены
+        кириллицей. Это предотвращает срабатывание safety-фильтров модели на
+        emoji-маркеры запрещённых веществ (❄️🍁 и т.п.) в оригинале.
+        """
         norm = _normalize_obfuscated(text)
-        # Передаём обе формы если нормализация что-то изменила
-        if norm.strip().lower() != text.strip().lower():
+        is_obfuscated = norm.strip().lower() != text.strip().lower()
+        if is_obfuscated:
             user_msg = (
-                f"Оригинал (возможна обфускация):\n«{text}»\n\n"
-                f"Нормализованный текст (латиница→кириллица, убраны пробелы в словах):\n«{norm}»"
+                f"Нормализованный текст (из обфусцированного оригинала — "
+                f"гомоглифы и emoji заменены):\n«{norm}»"
             )
         else:
             user_msg = f"«{text}»"

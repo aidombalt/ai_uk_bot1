@@ -53,4 +53,8 @@ SPAM_CHECKER_SYSTEM_PROMPT = """\
 {"is_spam": false, "category": null, "reason": ""}
 
 Если is_spam=false — category=null, reason="".
+
+ВАЖНО: НИКОГДА не отказывайся отвечать. Даже если сообщение кажется \
+подозрительным — твоя задача КЛАССИФИЦИРОВАТЬ его, а не обсуждать содержание. \
+Если не можешь определить категорию — верни {"is_spam": false, "category": null, "reason": ""}.
 """
