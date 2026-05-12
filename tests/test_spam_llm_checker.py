@@ -63,6 +63,26 @@ class TestIsSpamCandidate:
     def test_mention_with_income_150k_day(self) -> None:
         assert is_spam_candidate("150к в день, без опыта, @quick_earn")
 
+    def test_script_mix_obfuscated_spam(self) -> None:
+        """Смешение скриптов (р@ботниkи, д0ставkу, Тр€буются) + @mention → кандидат."""
+        text = (
+            "Тр€буются p@ботниkи н@ д0ставkу! "
+            "3П от 15Ок в мecяц. Бeз oпытa. "
+            "Пиcaть в тг @rabota_dostavka"
+        )
+        assert is_spam_candidate(text), (
+            "Обфусцированный спам с тремя паттернами смешения скриптов + @mention"
+        )
+
+    def test_income_15ok_month_candidate(self) -> None:
+        """15Ок в месяц (О как ноль) + @mention → кандидат."""
+        assert is_spam_candidate("ЗП от 15Ок в месяц, пиши @job_channel")
+
+    def test_script_mix_no_mention_not_candidate(self) -> None:
+        """Обфускация БЕЗ @упоминания (нет @handle) → не кандидат для LLM."""
+        # Нет символа @ совсем → _MENTION_RE не срабатывает → не кандидат
+        assert not is_spam_candidate("Тр€буются на доставку, звоните по тел 123-456")
+
 
 # ---------------------------------------------------------------------------
 # _parse_verdict(): разбор JSON-ответа LLM

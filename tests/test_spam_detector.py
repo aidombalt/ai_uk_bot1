@@ -61,6 +61,26 @@ class TestNormalizeObfuscated:
         assert "кристаллы" in result
         assert "шишки" in result
 
+    def test_latin_k_to_cyrillic_k(self) -> None:
+        # д0ставkу → доставку (Latin k → к, digit 0 → о)
+        assert "доставку" in _normalize_obfuscated("д0ставkу").lower()
+
+    def test_digit_zero_to_o(self) -> None:
+        # д0ставка → доставка
+        assert "доставка" in _normalize_obfuscated("д0ставка").lower()
+
+    def test_euro_sign_to_e(self) -> None:
+        # Тр€буются → Требуются
+        assert "требуются" in _normalize_obfuscated("Тр€буются").lower()
+
+    def test_full_new_spam_normalized(self) -> None:
+        # Полное сообщение из логов 2026-05-12 (второй паттерн)
+        spam = "Тр€буются p@ботниkи н@ д0ставkу! 3П от 15Ок в мecяц. Бeз oпытa."
+        result = _normalize_obfuscated(spam).lower()
+        assert "доставк" in result   # д0ставkу → доставку
+        assert "требу" in result     # Тр€буются → Требуются
+        assert "без опыта" in result # Бeз oпытa → Без опыта
+
 
 # ---------------------------------------------------------------------------
 # Реальный спам из логов (2026-05-12)
@@ -142,6 +162,45 @@ class TestObfuscationTechniques:
         verdict = detect("Дoxoд oт 150 тысяч в неделю @work_now пишите нам")
         assert verdict.is_spam
 
+    def test_income_pattern_15ok_month(self) -> None:
+        """15Ок в мecяц + @handle — income-паттерн с O=ноль."""
+        verdict = detect("ЗП от 15Ок в мecяц, пиши @rabota_dostavka")
+        assert verdict.is_spam
+        assert verdict.category == "earn"
+
+    def test_income_100k_week_with_mention(self) -> None:
+        """100к/неделю + @mention → detect ловит без LLM."""
+        verdict = detect("Доход 100к/неделю, пиши @work_bot")
+        assert verdict.is_spam
+        assert verdict.category == "earn"
+
+
+class TestNewSpamPatterns:
+    """Реальный спам из логов 2026-05-12 (второй паттерн — п@ботниkи)."""
+
+    SPAM_TEXT = (
+        "Тр€буются p@ботниkи н@ д0ставkу! "
+        "3П от 15Ок в мecяц. Бeз oпытa. "
+        "Пиcaть в тг @rabota_dostavka"
+    )
+
+    def test_is_spam(self) -> None:
+        verdict = detect(self.SPAM_TEXT)
+        assert verdict.is_spam, (
+            f"Спам с новыми техниками обфускации должен быть обнаружен. "
+            f"category={verdict.category}, matched={verdict.matched}"
+        )
+
+    def test_category_earn(self) -> None:
+        verdict = detect(self.SPAM_TEXT)
+        assert verdict.category == "earn"
+
+    def test_is_spam_candidate_triggers(self) -> None:
+        """is_spam_candidate должна запускать LLM-проверку для этого сообщения."""
+        assert is_spam_candidate(self.SPAM_TEXT), (
+            "Обфусцированный рекрутинговый спам должен быть кандидатом для LLM"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Ложные срабатывания: обычные сообщения жильцов
@@ -162,9 +221,13 @@ class TestFalsePositives:
         "Скорость интернета в доме упала вдвое",
         # Обычное упоминание в чате без спама
         "Привет @all_residents, напоминаю про субботник в 10:00",
-        # Числа с нулями — не должны ловиться как наркотики
+        # Числа с нулями — не должны ловиться как наркотики / income
         "Тариф повысили на 6% с января",
         "В доме 6 подъездов, 120 квартир",
+        # Числа 3-значные без к/неделю/месяц — не income pattern
+        "Счёт за ЖКХ 2800 рублей в этом месяце",
+        # @упоминание без коммерческих слов — не кандидат
+        "Напоминаю про субботник @all в 10:00!",
     ])
     def test_legit_message_not_spam(self, text: str) -> None:
         verdict = detect(text)
