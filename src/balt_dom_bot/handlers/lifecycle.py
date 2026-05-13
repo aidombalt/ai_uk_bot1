@@ -5,22 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from balt_dom_bot.config import AppConfig
+from balt_dom_bot.handlers.resident_commands import RESIDENT_HELP_TEXT
 from balt_dom_bot.log import get_logger
 
 log = get_logger(__name__)
-
-
-HELP_TEXT = (
-    "Я — AI-ассистент управляющей компании. Работаю в чатах ЖК:\n\n"
-    "🟢 Отвечаю на типовые вопросы (вода, лифт, охрана, благоустройство и т.д.)\n"
-    "🆘 Срочные обращения и аварии — сразу передаю управляющему\n"
-    "🔇 На оскорбления и провокации публично не отвечаю — пересылаю\n\n"
-    "Команды:\n"
-    "/start — приветствие\n"
-    "/help — это сообщение\n\n"
-    "Если Вы — управляющий: Ваш chat_id для настройки бота указан в логах "
-    "после нажатия /start (lifecycle.bot_started chat_id=...)."
-)
 
 
 async def _safe_send(event: Any, text: str) -> None:
@@ -43,13 +31,7 @@ def register_lifecycle_handlers(dp: Any, cfg: AppConfig) -> None:
         user = getattr(event, "user", None)
         user_id = getattr(user, "user_id", None) if user else None
         log.info("lifecycle.bot_started", chat_id=chat_id, user_id=user_id)
-        await _safe_send(
-            event,
-            "Здравствуйте! Я ассистент управляющей компании.\n\n"
-            "В групповом чате жилого комплекса я отвечаю на типовые вопросы; "
-            "сложные обращения передаются управляющему.\n\n"
-            "Команды: /help",
-        )
+        await _safe_send(event, RESIDENT_HELP_TEXT)
 
     @dp.bot_added()
     async def on_bot_added(event: Any) -> None:  # type: ignore[no-untyped-def]
@@ -83,6 +65,8 @@ async def register_bot_commands(bot: Any) -> None:
     commands = [
         BotCommand(name="start", description="Приветствие"),
         BotCommand(name="help", description="Что умеет бот"),
+        BotCommand(name="mystatus", description="Статус ваших обращений"),
+        BotCommand(name="contacts", description="Контакты и телефоны УК"),
     ]
     method = getattr(bot, "set_my_commands", None)
     if not callable(method):

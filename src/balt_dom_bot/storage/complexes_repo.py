@@ -37,6 +37,7 @@ class ComplexRow:
     daily_replies_limit: int = 5
     daily_window_hours: int = 6
     chat_mode_enabled: bool = False
+    contacts_info: str | None = None
 
 
 class ComplexesRepo:
@@ -114,6 +115,7 @@ class ComplexesRepo:
         daily_replies_limit: int = 5,
         daily_window_hours: int = 6,
         chat_mode_enabled: bool = False,
+        contacts_info: str | None = None,
     ) -> None:
         # Защита: бан раньше 1 страйка нелогичен, больше 10 — фактически выключает фичу.
         strikes_for_ban = max(1, min(10, int(strikes_for_ban)))
@@ -131,8 +133,9 @@ class ComplexesRepo:
                escalation_chat_id, escalate_to_manager, escalate_to_chat,
                manager_user_id, auto_delete_aggression, strikes_for_ban,
                trolling_strikes_for_ban, reply_mode, holiday_message,
-               daily_replies_limit, daily_window_hours, chat_mode_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               daily_replies_limit, daily_window_hours, chat_mode_enabled,
+               contacts_info)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               address = excluded.address,
@@ -151,6 +154,7 @@ class ComplexesRepo:
               daily_replies_limit = excluded.daily_replies_limit,
               daily_window_hours = excluded.daily_window_hours,
               chat_mode_enabled = excluded.chat_mode_enabled,
+              contacts_info = excluded.contacts_info,
               updated_at = datetime('now')
             """,
             (
@@ -168,6 +172,7 @@ class ComplexesRepo:
                 daily_replies_limit,
                 daily_window_hours,
                 1 if chat_mode_enabled else 0,
+                contacts_info or None,
             ),
         )
         await self._db.conn.commit()
@@ -263,4 +268,5 @@ def _row_to_complex(row) -> ComplexRow:
         daily_replies_limit=int(_opt("daily_replies_limit", 5) or 5),
         daily_window_hours=int(_opt("daily_window_hours", 6) or 6),
         chat_mode_enabled=bool(_opt("chat_mode_enabled", 0)),
+        contacts_info=_opt("contacts_info"),
     )

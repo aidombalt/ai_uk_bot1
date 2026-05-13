@@ -186,3 +186,31 @@ class EscalationRepo:
                 (limit,),
             )
         return [EscalationRow.from_row(r) for r in await cur.fetchall()]
+
+    async def list_by_user_in_chat(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Последние обращения конкретного жильца в конкретном чате ЖК.
+
+        Возвращает лёгкие dict-ы (не полные EscalationRow) чтобы не
+        тянуть тяжёлую десериализацию Classification.
+        """
+        cur = await self._db.conn.execute(
+            """
+            SELECT e.id,
+                   json_extract(e.classification, '$.theme') AS theme,
+                   e.status,
+                   e.created_at
+            FROM escalations e
+            WHERE e.user_id = ? AND e.chat_id = ?
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, chat_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]

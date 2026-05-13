@@ -405,6 +405,17 @@ async def _m12_resident_user_id(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _m13_resident_features(conn: aiosqlite.Connection) -> None:
+    """Контактная информация per-ЖК для команды /contacts.
+
+    contacts_info — произвольный текст с телефонами и ссылками,
+    который управляющий вводит в GUI. Показывается жильцам по /contacts.
+    """
+    await conn.execute(
+        "ALTER TABLE complexes_db ADD COLUMN contacts_info TEXT"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     _m1_escalations,
     _m2_logs_and_cache,
@@ -418,6 +429,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _m10_quotas_and_chat,
     _m11_manager_reply_flow,
     _m12_resident_user_id,
+    _m13_resident_features,
 )
 
 

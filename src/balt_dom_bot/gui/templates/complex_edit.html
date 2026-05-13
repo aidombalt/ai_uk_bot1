@@ -164,6 +164,20 @@
       <div class="col-12"><hr class="my-1"></div>
 
       <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">📞 Контакты для жильцов (/contacts)</h6>
+        <small class="text-muted">
+          Жилец может набрать <code>/contacts</code> в чате — бот пришлёт этот текст.
+          Укажите телефоны аварийной службы, диспетчера, сайт УК и пр.
+        </small>
+      </div>
+      <div class="col-12">
+        <textarea class="form-control" name="contacts_info" rows="4"
+                  placeholder="🆘 Аварийная служба: 8 (812) 123-45-67&#10;📱 Диспетчер: +7 (921) 000-00-00&#10;🌐 Сайт: uk-example.ru">{{ c.contacts_info or '' }}</textarea>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
         <h6 class="text-muted small text-uppercase mt-2">Режим работы</h6>
         <small class="text-muted">Меняет ТОЛЬКО реакцию на обращения жильцов. Модерация и эскалации работают независимо.</small>
       </div>

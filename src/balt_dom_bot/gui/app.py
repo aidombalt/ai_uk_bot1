@@ -593,6 +593,7 @@ def build_gui_app(deps: GuiDeps) -> FastAPI:
         daily_replies_limit: int = Form(default=5),
         daily_window_hours: int = Form(default=6),
         chat_mode_enabled: str = Form(default=""),
+        contacts_info: str = Form(default=""),
     ):
         def _opt_int(s: str) -> int | None:
             s = s.strip()
@@ -641,6 +642,7 @@ def build_gui_app(deps: GuiDeps) -> FastAPI:
             daily_replies_limit=daily_replies_limit,
             daily_window_hours=daily_window_hours,
             chat_mode_enabled=(chat_mode_enabled == "on"),
+            contacts_info=contacts_info.strip() or None,
         )
         return RedirectResponse("/complexes", status_code=status.HTTP_303_SEE_OTHER)
 

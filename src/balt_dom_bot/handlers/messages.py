@@ -14,6 +14,7 @@ from balt_dom_bot.log import get_logger
 from balt_dom_bot.models import IncomingMessage
 from balt_dom_bot.services.pipeline import Pipeline
 from balt_dom_bot.handlers import admin_commands as admin_cmd
+from balt_dom_bot.handlers import resident_commands as resident_cmd
 
 if TYPE_CHECKING:
     from balt_dom_bot.handlers.manager_reply import ManagerReplyHandler
@@ -43,26 +44,11 @@ def _extract_linked_mid(msg: Any) -> str | None:
         return None
 
 
-HELP_TEXT = (
-    "Я — AI-ассистент управляющей компании. Работаю в чатах ЖК:\n\n"
-    "🟢 Отвечаю на типовые вопросы (вода, лифт, охрана, благоустройство и т.д.)\n"
-    "🆘 Срочные обращения и аварии — сразу передаю управляющему\n"
-    "🔇 На оскорбления и провокации публично не отвечаю — пересылаю\n\n"
-    "Команды:\n"
-    "/start — приветствие\n"
-    "/help — это сообщение"
-)
-
-
-def _is_help_command(text: str) -> bool:
-    normalized = text.strip().lower().split("@")[0]  # /help@bot_name → /help
-    return normalized in ("/help", "/команды", "/cmd")
-
-
 def register_message_handlers(
     dp: Any,
     pipeline: Pipeline,
     manager_reply_handler: "ManagerReplyHandler | None" = None,
+    escalations_repo: Any = None,
 ) -> None:
     @dp.message_created()
     async def on_message(event: Any) -> None:  # type: ignore[no-untyped-def]
@@ -133,14 +119,23 @@ def register_message_handlers(
         except Exception as exc:
             log.exception("admin_cmd.crash_falling_through", error=str(exc))
 
-        # Команда /help — ответ напрямую, без pipeline.
-        if _is_help_command(text):
+        # Пользовательские команды жильца (/help, /mystatus, /contacts...).
+        # Обрабатываем ДО pipeline — в любом чате (группа или личка).
+        if resident_cmd.is_resident_command(text):
             try:
-                await event.bot.send_message(chat_id=chat_id, text=HELP_TEXT)
-                log.info("help.sent", chat_id=chat_id)
+                handled = await resident_cmd.handle_resident_command(
+                    bot=event.bot,
+                    text=text,
+                    user_id=sender_id,
+                    chat_id=int(chat_id),
+                    complexes=pipeline._complexes,
+                    escalations=escalations_repo,
+                )
+                if handled:
+                    log.info("resident_cmd.handled", cmd=text.split()[0], chat_id=chat_id)
+                    return
             except Exception as exc:
-                log.warning("help.failed", chat_id=chat_id, error=str(exc))
-            return
+                log.exception("resident_cmd.crash", error=str(exc))
 
         ts = getattr(msg, "timestamp", None)
         received_at = (
