@@ -261,7 +261,11 @@ async def build_app(cfg: AppConfig, env: Env) -> App:
     )
 
     register_lifecycle_handlers(dp, cfg)
-    register_message_handlers(dp, pipeline, manager_reply_handler=manager_reply_handler)
+    register_message_handlers(
+        dp, pipeline,
+        manager_reply_handler=manager_reply_handler,
+        escalations_repo=esc_repo,
+    )
     register_callback_handlers(
         dp, repo=esc_repo, reply_sender=reply_sender,
         escalation_sender=escalation_sender, message_log=msg_log, cfg=cfg,
