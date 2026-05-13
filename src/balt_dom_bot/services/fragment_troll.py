@@ -41,7 +41,9 @@ class FragmentEntry:
 _PROFANITY_ROOTS = (
     r"ху[йеяёюи]",
     r"пизд",
-    r"бля[дт]?",
+    # \b — слово должно начинаться с «бля», чтобы не задевать «оскорбляет»,
+    # «изображать» и другие слова с «бля» внутри корня.
+    r"\bбля[дт]?",
     r"еба[лнт]",
     r"ёб[аеёлнт]",
     r"ебан",
@@ -109,17 +111,15 @@ class FragmentTrollDetector:
     ) -> list[str] | None:
         """Проверяет: есть ли мат в склейке, которого нет в отдельных частях.
 
-        Возвращает список mid всех частей если троллинг обнаружен; None если нет.
+        Возвращает список mid МИНИМАЛЬНОГО суффикса (самых свежих сообщений),
+        чья склейка создаёт мат при условии, что каждое из них по отдельности
+        чисто. Возвращает None если:
+        - мат уже виден в отдельных сообщениях (нормальная модерация справится),
+        - или мата нет вообще.
 
-        Логика:
-        1) Чистим протухшие фрагменты (>WINDOW_SECONDS).
-        2) Если фрагментов <2 — точно не split-bypass.
-        3) Склейка всех текстов с пробелами.
-        4) Mat в склейке есть?
-        5) Mat в каждом отдельном фрагменте?
-           - Да в каждом → это просто матерящийся юзер, обычная модерация уже сработала
-           - Нет ни в каком → ЭТО SPLIT-BYPASS, возвращаем все mid
-           - В части есть, в части нет → mid тех в которых нет (это «прикрытие»)
+        Минимальный суффикс гарантирует, что старые легитимные сообщения
+        (например, жалоба жильца, отправленная до всплеска агрессии) не будут
+        удалены вместе с оскорбительными.
         """
         key = (chat_id, user_id)
         buf = self._buffers.get(key)
@@ -127,38 +127,36 @@ class FragmentTrollDetector:
             return None
 
         cutoff = time.time() - self.WINDOW_SECONDS
-        # Чистим протухшие
         while buf and buf[0].received_at < cutoff:
             buf.popleft()
 
         if len(buf) < 2:
             return None
 
-        joined = " ".join(e.text for e in buf)
-        if not _has_profanity(joined):
-            return None
+        entries = list(buf)
 
-        # Mat в склейке есть. Проверяем — был ли он в каждом отдельном.
-        any_clean = False
-        for entry in buf:
-            if not _has_profanity(entry.text):
-                any_clean = True
-                break
+        # Ищем МИНИМАЛЬНЫЙ суффикс (самые свежие сообщения), склейка которого
+        # содержит мат, при этом каждое сообщение суффикса по отдельности чисто.
+        # Начинаем с последних двух, расширяемся только при необходимости.
+        for start in range(len(entries) - 2, -1, -1):
+            suffix = entries[start:]
+            # Если хотя бы одно сообщение в суффиксе содержит мат само по себе,
+            # это не split-bypass — нормальная per-message модерация обработает его.
+            if any(_has_profanity(e.text) for e in suffix):
+                continue
+            joined = " ".join(e.text for e in suffix)
+            if not _has_profanity(joined):
+                continue
+            # Split-bypass: склейка матерная, каждая часть по отдельности чиста.
+            log.warning(
+                "fragment_troll.detected",
+                chat_id=chat_id, user_id=user_id,
+                fragments=len(suffix),
+                joined_preview=joined[:100],
+            )
+            return [e.message_id for e in suffix]
 
-        if not any_clean:
-            # Каждое отдельное сообщение содержит мат — это обычная агрессия,
-            # нормальная модерация уже сработает на каждом по отдельности.
-            return None
-
-        # Это split-bypass: склейка содержит мат, но какие-то отдельные части
-        # сами по себе чистые. Возвращаем все mid в окне для удаления.
-        log.warning(
-            "fragment_troll.detected",
-            chat_id=chat_id, user_id=user_id,
-            fragments=len(buf),
-            joined_preview=joined[:100],
-        )
-        return [e.message_id for e in buf]
+        return None
 
     def clear(self, *, chat_id: int, user_id: int) -> None:
         """Чистит буфер юзера (после удаления — чтобы не сработать повторно)."""
