@@ -142,6 +142,24 @@ class ReplySender:
         raise NotImplementedError
 
 
+def _format_clarification_notification(
+    *,
+    complex_info: "ComplexInfo",
+    msg: "IncomingMessage",
+    reply_text: str | None,
+) -> str:
+    """Краткое уведомление об уточнении жильца для чата «Обращения»."""
+    name = msg.user_name or f"id{msg.user_id}" or "—"
+    text = (
+        f"🔄 Уточнение жильца · {complex_info.name}\n"
+        f"👤 {name}\n\n"
+        f"💬 «{msg.text}»"
+    )
+    if reply_text:
+        text += f"\n─────\n✅ {reply_text}"
+    return text
+
+
 def _format_auto_reply_notification(
     *,
     complex_info: ComplexInfo,
@@ -1074,8 +1092,13 @@ class Pipeline:
             # там должно быть только то, что требует реакции.
             # Chat-mode: per-message уведомление подавляем — управляющий получит
             # одно компактное резюме после порогового числа обменов.
+            # Исключение: уточнение жильца на вопрос бота (_awaiting_clarification)
+            # всегда требует обновления управляющего — он уже получил первоначальное
+            # обращение и ждёт деталей (подъезд, этаж).
             if not use_chat_mode:
                 await self._maybe_notify_chat(complex_info, msg, cls, decision, prior_ctx)
+            elif _awaiting_clarification:
+                await self._maybe_notify_clarification(complex_info, msg, decision)
 
         # Авто-модерация: AGGRESSION/PROVOCATION → удаление + страйк.
         # Перепалки между жильцами («не тебе, дурень») — НЕ наша забота.
@@ -1195,6 +1218,41 @@ class Pipeline:
                 )
             except Exception as exc:
                 log.warning("pipeline.notif_map_save_failed", error=str(exc))
+
+    async def _maybe_notify_clarification(
+        self,
+        complex_info: ComplexInfo,
+        msg: IncomingMessage,
+        decision: PipelineDecision,
+    ) -> None:
+        """Отправляет управляющему краткое обновление с уточнением жильца.
+
+        Вызывается когда жилец ответил на уточняющий вопрос бота (_awaiting_clarification),
+        но pipeline перешёл в chat_mode — стандартный _maybe_notify_chat в этом случае
+        не вызывается, а управляющий должен получить полные данные обращения.
+        """
+        if self._notifier is None:
+            return
+        if not complex_info.escalate_to_chat:
+            return
+        if not complex_info.escalation_chat_id:
+            return
+        text = _format_clarification_notification(
+            complex_info=complex_info,
+            msg=msg,
+            reply_text=decision.reply_text,
+        )
+        try:
+            await self._notifier.send_notification_to_chat(
+                chat_id=complex_info.escalation_chat_id, text=text,
+            )
+            log.info(
+                "pipeline.clarification_notified",
+                chat_id=msg.chat_id,
+                user_id=msg.user_id,
+            )
+        except Exception as exc:
+            log.warning("pipeline.clarification_notify_failed", error=str(exc))
 
     async def _handle_spam(
         self,
