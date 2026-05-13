@@ -243,7 +243,7 @@ class Pipeline:
         # даже модерация не работает. Аварийный stop-switch.
         if self._global_settings is not None:
             if not await self._global_settings.is_bot_enabled():
-                log.debug("pipeline.skip_global_disabled", chat_id=msg.chat_id)
+                log.info("pipeline.skip_global_disabled", chat_id=msg.chat_id)
                 return PipelineDecision(
                     classification=Classification(
                         theme=Theme.OTHER, urgency="LOW",  # type: ignore[arg-type]
@@ -255,7 +255,7 @@ class Pipeline:
         # Уровень 2: ЖК существует и активен (find_by_chat фильтрует по active=1).
         complex_row = await self._complexes.find_by_chat(msg.chat_id)
         if complex_row is None:
-            log.debug("pipeline.skip_unknown_chat", chat_id=msg.chat_id)
+            log.warning("pipeline.skip_unknown_chat", chat_id=msg.chat_id)
             empty = PipelineDecision(
                 classification=Classification(
                     theme=Theme.OTHER,
