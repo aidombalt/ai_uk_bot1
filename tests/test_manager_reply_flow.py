@@ -105,6 +105,7 @@ async def test_repo_create_and_get_draft():
         notif_mid="mid-001", notif_chat_id=-100_001,
         complex_id="jk-1", resident_chat_id=-200_001,
         resident_mid="res-001", resident_name="Иван",
+        resident_user_id=None,
         created_at=datetime.now(),
     )
     draft_id = await repo.create_draft(notif, "Починим завтра")
@@ -137,6 +138,7 @@ async def test_repo_cancel_pending():
         notif_mid="mid-002", notif_chat_id=-100_001,
         complex_id="jk-1", resident_chat_id=-200_001,
         resident_mid="res-002", resident_name=None,
+        resident_user_id=None,
         created_at=datetime.now(),
     )
 
@@ -171,6 +173,7 @@ async def test_repo_mark_sent_idempotent():
         notif_mid="mid-003", notif_chat_id=-100_001,
         complex_id="jk-1", resident_chat_id=-200_001,
         resident_mid="res-003", resident_name=None,
+        resident_user_id=None,
         created_at=datetime.now(),
     )
     draft_id = await repo.create_draft(notif, "Текст")
@@ -244,6 +247,7 @@ def _make_notif_entry():
         notif_mid="mid-linked", notif_chat_id=-100_001,
         complex_id="jk-test", resident_chat_id=-200_001,
         resident_mid="res-999", resident_name="Ольга",
+        resident_user_id=None,
         created_at=datetime.now(),
     )
 
@@ -359,7 +363,7 @@ async def test_callback_send_formatted():
     draft = DraftRow(
         id=42, notif_mid="mid-1", notif_chat_id=-100_001,
         complex_id="jk-1", resident_chat_id=-200_001,
-        resident_mid="res-001", manager_text="Починим завтра",
+        resident_mid="res-001", resident_user_id=None, manager_text="Починим завтра",
         formatted_text="Работы будут выполнены.",
         status=DraftStatus.PENDING, choice_card_mid="choice-001",
         created_at=datetime.now(), sent_at=None,
@@ -412,7 +416,7 @@ async def test_callback_send_original():
     draft = DraftRow(
         id=77, notif_mid="mid-2", notif_chat_id=-100_002,
         complex_id="jk-2", resident_chat_id=-200_002,
-        resident_mid="res-002", manager_text="Нет воды, ждите",
+        resident_mid="res-002", resident_user_id=None, manager_text="Нет воды, ждите",
         formatted_text="Ведутся технические работы.",
         status=DraftStatus.PENDING, choice_card_mid=None,
         created_at=datetime.now(), sent_at=None,
@@ -457,7 +461,7 @@ async def test_callback_already_sent():
     draft = DraftRow(
         id=99, notif_mid="mid-3", notif_chat_id=-100_003,
         complex_id="jk-3", resident_chat_id=-200_003,
-        resident_mid="res-003", manager_text="Текст",
+        resident_mid="res-003", resident_user_id=None, manager_text="Текст",
         formatted_text=None, status=DraftStatus.SENT_FORMATTED,
         choice_card_mid=None, created_at=datetime.now(), sent_at=datetime.now(),
     )
@@ -557,6 +561,7 @@ async def test_pipeline_maybe_notify_saves_notif_mid():
         resident_chat_id=-200,
         resident_mid="msg-abc",
         resident_name="Тест",
+        resident_user_id=7,
     )
 
 
@@ -622,6 +627,7 @@ async def test_escalator_saves_card_mid_to_notif_map():
         resident_chat_id=-200,
         resident_mid="msg-esc",
         resident_name="Жилец",
+        resident_user_id=8,
     )
 
 

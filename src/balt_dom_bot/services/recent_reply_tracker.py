@@ -1,14 +1,13 @@
-"""Анти-дубликат: бот не отвечает дважды на близкую тему за короткое время.
+"""Анти-дубликат: один жилец не получает одинаковый ответ дважды за короткое время.
 
-Проблема: жильцы пишут «Что с электричеством?» → бот отвечает шаблоном.
-Через 30 секунд другой пишет «Отопления у всех нет?» → бот снова отвечает
-тем же шаблоном «обращение принято, передано специалистам». Это спам в чат
-от УК — раздражает остальных жильцов.
+Проблема: жилец пишет «Что с электричеством?» → бот отвечает шаблоном.
+Через минуту тот же жилец снова пишет про ту же тему → бот заново отвечает
+тем же шаблоном. Это лишний шум.
 
-Решение: для каждого чата храним последние ответы бота с темой/тегами.
-Перед отправкой нового ответа проверяем: «есть ли близкий ответ за последние
-N минут?» → если да, silent (управляющий уже получил эскалацию, дублировать
-ответ в чате не нужно).
+ВАЖНО: дедупликация работает per-(chat_id, user_id), а НЕ по всему чату.
+Каждый жилец получает ответ на своё обращение независимо от других.
+Ограничение применяется только если ТОТ ЖЕ пользователь присылает похожие
+сообщения в быстрой последовательности.
 
 «Близкий» = пересечение по теме (Theme) ИЛИ по ключевым словам (50%+ overlap).
 """
@@ -33,16 +32,17 @@ class RecentReply:
 
 
 class RecentReplyTracker:
-    """In-memory кольцо последних ответов бота по чатам."""
+    """In-memory кольцо последних ответов бота по пользователям."""
 
-    MAX_PER_CHAT = 6
+    MAX_PER_USER = 6
     DEDUP_WINDOW_SECONDS = 5 * 60  # 5 минут — окно дедупа
 
     def __init__(self):
-        self._chats: dict[int, deque[RecentReply]] = {}
+        self._users: dict[tuple[int, int], deque[RecentReply]] = {}
 
-    def _cleanup(self, chat_id: int) -> None:
-        buf = self._chats.get(chat_id)
+    def _cleanup(self, chat_id: int, user_id: int) -> None:
+        key = (chat_id, user_id)
+        buf = self._users.get(key)
         if not buf:
             return
         cutoff = time.time() - self.DEDUP_WINDOW_SECONDS
@@ -52,18 +52,20 @@ class RecentReplyTracker:
     def is_recent_duplicate(
         self, *,
         chat_id: int,
+        user_id: int,
         theme: Theme,
         text: str,
     ) -> bool:
-        """Возвращает True, если бот недавно отвечал на близкую тему.
+        """Возвращает True, если бот недавно отвечал этому пользователю на близкую тему.
 
         Признаки близости:
         1) Та же Theme (UTILITY → UTILITY): почти всегда дубликат темы.
            Исключение — Theme.OTHER не считается дубликатом (слишком общая).
         2) Большое пересечение ключевых слов вопроса.
         """
-        self._cleanup(chat_id)
-        buf = self._chats.get(chat_id)
+        self._cleanup(chat_id, user_id)
+        key = (chat_id, user_id)
+        buf = self._users.get(key)
         if not buf:
             return False
 
@@ -77,7 +79,7 @@ class RecentReplyTracker:
             ):
                 log.info(
                     "recent_reply.duplicate_by_theme",
-                    chat_id=chat_id, theme=theme.value,
+                    chat_id=chat_id, user_id=user_id, theme=theme.value,
                     age_s=round(time.time() - prev.sent_at),
                 )
                 return True
@@ -88,7 +90,7 @@ class RecentReplyTracker:
                 if len(inter) >= 2:
                     log.info(
                         "recent_reply.duplicate_by_keywords",
-                        chat_id=chat_id, overlap=list(inter)[:5],
+                        chat_id=chat_id, user_id=user_id, overlap=list(inter)[:5],
                         overlap_count=len(inter),
                     )
                     return True
@@ -97,12 +99,14 @@ class RecentReplyTracker:
     def register(
         self, *,
         chat_id: int,
+        user_id: int,
         theme: Theme,
         text: str,
     ) -> None:
-        """Запоминает что бот только что ответил на тему `theme` про `text`."""
-        buf = self._chats.setdefault(
-            chat_id, deque(maxlen=self.MAX_PER_CHAT),
+        """Запоминает что бот только что ответил пользователю `user_id` на тему `theme`."""
+        key = (chat_id, user_id)
+        buf = self._users.setdefault(
+            key, deque(maxlen=self.MAX_PER_USER),
         )
         buf.append(RecentReply(
             theme=theme,

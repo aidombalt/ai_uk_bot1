@@ -926,7 +926,7 @@ class Pipeline:
             and self._recent_replies is not None
         ):
             if self._recent_replies.is_recent_duplicate(
-                chat_id=msg.chat_id, theme=cls.theme, text=msg.text,
+                chat_id=msg.chat_id, user_id=msg.user_id, theme=cls.theme, text=msg.text,
             ):
                 log.info(
                     "pipeline.reply_silenced_recent_duplicate",
@@ -972,7 +972,7 @@ class Pipeline:
             if self._recent_replies is not None and not use_chat_mode:
                 try:
                     self._recent_replies.register(
-                        chat_id=msg.chat_id, theme=cls.theme, text=msg.text,
+                        chat_id=msg.chat_id, user_id=msg.user_id, theme=cls.theme, text=msg.text,
                     )
                 except Exception as exc:
                     log.warning("pipeline.recent_replies_register_failed", error=str(exc))
