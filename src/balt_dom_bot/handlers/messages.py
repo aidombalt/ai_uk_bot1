@@ -120,19 +120,22 @@ def register_message_handlers(
             log.exception("admin_cmd.crash_falling_through", error=str(exc))
 
         # Пользовательские команды жильца (/help, /mystatus, /contacts...).
-        # Обрабатываем ДО pipeline — в любом чате (группа или личка).
+        # В групповом чате тихо поглощаем (без ответа) — предотвращает спам.
+        # В личном диалоге — обрабатываем и возвращаемся, pipeline не запускаем.
         if resident_cmd.is_resident_command(text):
             try:
+                if not admin_cmd.is_dialog_chat(msg):
+                    log.debug("resident_cmd.group_silenced", cmd=text.strip().split()[0])
+                    return
                 handled = await resident_cmd.handle_resident_command(
                     bot=event.bot,
                     text=text,
                     user_id=sender_id,
                     chat_id=int(chat_id),
-                    complexes=pipeline._complexes,
                     escalations=escalations_repo,
                 )
                 if handled:
-                    log.info("resident_cmd.handled", cmd=text.split()[0], chat_id=chat_id)
+                    log.info("resident_cmd.handled", cmd=text.strip().split()[0])
                     return
             except Exception as exc:
                 log.exception("resident_cmd.crash", error=str(exc))

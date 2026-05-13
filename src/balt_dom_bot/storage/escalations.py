@@ -214,3 +214,56 @@ class EscalationRepo:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    async def list_by_user(
+        self,
+        *,
+        user_id: int,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Последние обращения жильца по ВСЕМ чатам ЖК.
+
+        Возвращает dict-ы с полем complex_name (из JOIN с complexes_db).
+        Используется для /mystatus в личном диалоге с ботом.
+        """
+        cur = await self._db.conn.execute(
+            """
+            SELECT e.id,
+                   e.chat_id,
+                   COALESCE(c.name, 'Неизвестный ЖК') AS complex_name,
+                   json_extract(e.classification, '$.theme') AS theme,
+                   e.status,
+                   e.created_at
+            FROM escalations e
+            LEFT JOIN complexes_db c ON c.chat_id = e.chat_id
+            WHERE e.user_id = ?
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def list_user_complexes(
+        self,
+        *,
+        user_id: int,
+    ) -> list[dict]:
+        """Список ЖК, в которых у жильца есть хотя бы одно обращение.
+
+        Используется для /contacts в личном диалоге: возвращает name
+        и contacts_info для каждого ЖК жильца.
+        """
+        cur = await self._db.conn.execute(
+            """
+            SELECT DISTINCT c.name, c.contacts_info
+            FROM escalations e
+            JOIN complexes_db c ON c.chat_id = e.chat_id
+            WHERE e.user_id = ?
+            ORDER BY c.name
+            """,
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]

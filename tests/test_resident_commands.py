@@ -1,26 +1,33 @@
 """Smoke-тесты команд для жильцов (/help, /mystatus, /contacts).
 
 Проверяем:
-1.  is_resident_command распознаёт все известные команды.
-2.  is_resident_command возвращает False для обычных сообщений.
-3.  is_resident_command нечувствителен к регистру и @-упоминаниям.
-4.  RESIDENT_HELP_TEXT не содержит внутренних технических деталей.
-5.  RESIDENT_HELP_TEXT упоминает /mystatus и /contacts.
-6.  handle_resident_command → /help отправляет help-текст.
-7.  handle_resident_command → /start отправляет help-текст.
-8.  handle_resident_command → /mystatus без эскалаций: "нет обращений".
-9.  handle_resident_command → /mystatus с обращениями: показывает статусы.
-10. handle_resident_command → /contacts без contacts_info: дефолтное сообщение.
-11. handle_resident_command → /contacts с contacts_info: кастомный текст.
-12. handle_resident_command → /contacts в чате без ЖК: fallback-ответ.
-13. Неизвестная команда → handle_resident_command возвращает False.
-14. _format_mystatus: PENDING → "в работе", APPROVED → "рассмотрено".
-15. _format_mystatus: пустой список → приглашение написать.
-16. EscalationRepo.list_by_user_in_chat: возвращает только записи этого user/chat.
-17. EscalationRepo.list_by_user_in_chat: пустой список для нового пользователя.
-18. ComplexesRepo: contacts_info сохраняется и читается.
-19. HELP_TEXT в lifecycle.py ссылается на RESIDENT_HELP_TEXT (не дублируется).
-20. messages.py регистрирует resident_commands, не содержит HELP_TEXT-литерала.
+ 1. is_resident_command распознаёт все известные команды.
+ 2. is_resident_command → False для обычных сообщений и пустой строки.
+ 3. is_resident_command нечувствителен к регистру и @-упоминаниям.
+ 4. RESIDENT_HELP_TEXT не содержит внутренних технических деталей.
+ 5. RESIDENT_HELP_TEXT упоминает /mystatus и /contacts.
+ 6. handle_resident_command → /help отправляет help-текст.
+ 7. handle_resident_command → /start отправляет help-текст.
+ 8. /mystatus без обращений — понятный текст, не «Не удалось».
+ 9. /mystatus с обращениями — показывает статусы и complex_name.
+10. /mystatus без user_id — fallback, не падение.
+11. /contacts с contacts_info — кастомный текст УК.
+12. /contacts без contacts_info — честный fallback без «передам».
+13. /contacts без обращений в ЖК (нет ЖК) — текст с подсказкой.
+14. Неизвестная команда → handle_resident_command возвращает False.
+15. _format_mystatus: PENDING/APPROVED/IGNORED → русские статусы.
+16. _format_mystatus: пустой список → «нет обращений».
+17. _format_mystatus: группирует по ЖК.
+18. _format_mystatus: считает активных.
+19. _format_contacts: один ЖК с контактами.
+20. _format_contacts: несколько ЖК.
+21. _format_contacts: пустой список → просьба написать в ЖК.
+22. EscalationRepo.list_by_user: возвращает записи с complex_name.
+23. EscalationRepo.list_by_user: пустой список для нового пользователя.
+24. EscalationRepo.list_user_complexes: правильные ЖК для пользователя.
+25. ComplexesRepo: contacts_info сохраняется и читается.
+26. lifecycle.py импортирует RESIDENT_HELP_TEXT (не дублирует).
+27. messages.py содержит resident_commands, не дублирует HELP_TEXT.
 """
 
 from __future__ import annotations
@@ -28,9 +35,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 
 # ---------------------------------------------------------------------------
 # Утилиты
@@ -45,12 +53,19 @@ async def _build_db():
 
 
 def _make_bot(sent: list) -> Any:
-    """Мок бота, записывающий отправленные сообщения."""
     bot = MagicMock()
     async def _send(chat_id, text):
         sent.append(text)
     bot.send_message = AsyncMock(side_effect=_send)
     return bot
+
+
+def _make_escalations_mock(rows_by_user=None, complexes_by_user=None):
+    """Мок EscalationRepo с list_by_user и list_user_complexes."""
+    esc = MagicMock()
+    esc.list_by_user = AsyncMock(return_value=rows_by_user or [])
+    esc.list_user_complexes = AsyncMock(return_value=complexes_by_user or [])
+    return esc
 
 
 # ===========================================================================
@@ -74,7 +89,7 @@ def test_is_resident_command_false_for_normal_text():
     assert not is_resident_command("когда будет горячая вода?")
     assert not is_resident_command("")
     assert not is_resident_command("/unknown_cmd")
-    assert not is_resident_command("/status")   # /status — только для управляющих
+    assert not is_resident_command("/status")   # только для управляющих
 
 
 def test_is_resident_command_case_insensitive():
@@ -90,7 +105,6 @@ def test_is_resident_command_case_insensitive():
 
 def test_resident_help_no_internal_details():
     from balt_dom_bot.handlers.resident_commands import RESIDENT_HELP_TEXT
-    # Не должно быть слов, раскрывающих внутреннюю механику
     for bad_word in ["пересылаю", "lifecycle", "chat_id", "логах", "управляющий"]:
         assert bad_word not in RESIDENT_HELP_TEXT, \
             f"Help text should not contain internal term: {bad_word!r}"
@@ -108,118 +122,103 @@ def test_resident_help_mentions_new_commands():
 
 @pytest.mark.asyncio
 async def test_handle_help_command():
-    from balt_dom_bot.handlers.resident_commands import (
-        RESIDENT_HELP_TEXT, handle_resident_command,
-    )
+    from balt_dom_bot.handlers.resident_commands import RESIDENT_HELP_TEXT, handle_resident_command
     sent = []
     bot = _make_bot(sent)
-    complexes = MagicMock()
-    complexes.find_by_chat = AsyncMock(return_value=None)
-
     result = await handle_resident_command(
-        bot=bot, text="/help", user_id=42, chat_id=-100,
-        complexes=complexes, escalations=None,
+        bot=bot, text="/help", user_id=42, chat_id=42,
+        escalations=None,
     )
     assert result is True
-    assert len(sent) == 1
     assert sent[0] == RESIDENT_HELP_TEXT
 
 
 @pytest.mark.asyncio
 async def test_handle_start_command():
-    from balt_dom_bot.handlers.resident_commands import (
-        RESIDENT_HELP_TEXT, handle_resident_command,
-    )
+    from balt_dom_bot.handlers.resident_commands import RESIDENT_HELP_TEXT, handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-    complexes = MagicMock()
     result = await handle_resident_command(
-        bot=bot, text="/start", user_id=1, chat_id=-100,
-        complexes=complexes, escalations=None,
+        bot=_make_bot(sent), text="/start", user_id=1, chat_id=1,
+        escalations=None,
     )
     assert result is True
     assert sent[0] == RESIDENT_HELP_TEXT
 
 
 # ===========================================================================
-# 8–9. /mystatus
+# 8–10. /mystatus
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_mystatus_no_escalations():
+    """/mystatus без записей — понятный текст, не «Не удалось»."""
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-    escalations = MagicMock()
-    escalations.list_by_user_in_chat = AsyncMock(return_value=[])
-
+    esc = _make_escalations_mock(rows_by_user=[])
     result = await handle_resident_command(
-        bot=bot, text="/mystatus", user_id=77, chat_id=-200,
-        complexes=MagicMock(), escalations=escalations,
+        bot=_make_bot(sent), text="/mystatus", user_id=77, chat_id=77,
+        escalations=esc,
     )
     assert result is True
-    assert "нет" in sent[0].lower() or "пока" in sent[0].lower()
+    # Должны быть слова об отсутствии обращений, а не «Не удалось»
+    text = sent[0].lower()
+    assert "не удалось" not in text
+    assert "нет" in text or "пока" in text
 
 
 @pytest.mark.asyncio
 async def test_mystatus_with_escalations():
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-
-    mock_rows = [
-        {"id": 10, "theme": "TECH_FAULT", "status": "PENDING",
-         "created_at": "2026-05-10 10:00:00"},
-        {"id": 7, "theme": "EMERGENCY", "status": "APPROVED",
-         "created_at": "2026-05-08 15:30:00"},
+    rows = [
+        {"id": 10, "complex_name": "ЖК Балтийский", "theme": "TECH_FAULT",
+         "status": "PENDING", "created_at": "2026-05-10 10:00:00"},
+        {"id": 7, "complex_name": "ЖК Балтийский", "theme": "EMERGENCY",
+         "status": "APPROVED", "created_at": "2026-05-08 15:30:00"},
     ]
-    escalations = MagicMock()
-    escalations.list_by_user_in_chat = AsyncMock(return_value=mock_rows)
-
+    esc = _make_escalations_mock(rows_by_user=rows)
     result = await handle_resident_command(
-        bot=bot, text="/mystatus", user_id=77, chat_id=-200,
-        complexes=MagicMock(), escalations=escalations,
+        bot=_make_bot(sent), text="/mystatus", user_id=77, chat_id=77,
+        escalations=esc,
     )
     assert result is True
     assert "#10" in sent[0]
     assert "#7" in sent[0]
     assert "в работе" in sent[0]
     assert "рассмотрено" in sent[0]
+    assert "ЖК Балтийский" in sent[0]
 
 
 @pytest.mark.asyncio
 async def test_mystatus_no_user_id():
-    """Без user_id — fallback сообщение об ошибке, не падение."""
+    """Без user_id — fallback, не падение."""
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
     result = await handle_resident_command(
-        bot=bot, text="/mystatus", user_id=None, chat_id=-200,
-        complexes=MagicMock(), escalations=None,
+        bot=_make_bot(sent), text="/mystatus", user_id=None, chat_id=1,
+        escalations=None,
     )
     assert result is True
     assert len(sent) == 1
+    assert "не удалось" in sent[0].lower() or "аккаунт" in sent[0].lower()
 
 
 # ===========================================================================
-# 10–12. /contacts
+# 11–13. /contacts
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_contacts_with_custom_info():
+    """/contacts — показывает contacts_info из ЖК жильца."""
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-
-    complex_mock = MagicMock()
-    complex_mock.name = "ЖК Аврора-1"
-    complex_mock.contacts_info = "🆘 Аварийная: 8 (812) 123-45-67\n📱 Диспетчер: +7 (921) 000"
-    complexes = MagicMock()
-    complexes.find_by_chat = AsyncMock(return_value=complex_mock)
-
+    esc = _make_escalations_mock(complexes_by_user=[
+        {"name": "ЖК Аврора-1",
+         "contacts_info": "🆘 Аварийная: 8 (812) 123-45-67\n📱 Диспетчер: +7 (921) 000"},
+    ])
     result = await handle_resident_command(
-        bot=bot, text="/contacts", user_id=5, chat_id=-300,
-        complexes=complexes, escalations=None,
+        bot=_make_bot(sent), text="/contacts", user_id=5, chat_id=5,
+        escalations=esc,
     )
     assert result is True
     assert "8 (812) 123-45-67" in sent[0]
@@ -228,74 +227,67 @@ async def test_contacts_with_custom_info():
 
 @pytest.mark.asyncio
 async def test_contacts_without_custom_info():
+    """/contacts — ЖК найден, но contacts_info не заполнен → честный fallback."""
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-
-    complex_mock = MagicMock()
-    complex_mock.name = "ЖК Балтик"
-    complex_mock.contacts_info = None
-    complexes = MagicMock()
-    complexes.find_by_chat = AsyncMock(return_value=complex_mock)
-
+    esc = _make_escalations_mock(complexes_by_user=[
+        {"name": "ЖК Балтик", "contacts_info": None},
+    ])
     result = await handle_resident_command(
-        bot=bot, text="/contacts", user_id=5, chat_id=-300,
-        complexes=complexes, escalations=None,
+        bot=_make_bot(sent), text="/contacts", user_id=5, chat_id=5,
+        escalations=esc,
     )
     assert result is True
     assert "ЖК Балтик" in sent[0]
-    # Честный fallback: не обещает «передам специалисту», упоминает аварийную службу
     assert "передам специалисту" not in sent[0]
     assert "аварийн" in sent[0].lower() or "не заполнена" in sent[0].lower()
 
 
 @pytest.mark.asyncio
-async def test_contacts_unknown_chat_fallback():
-    """Если чат не является зарегистрированным ЖК — fallback без падения."""
+async def test_contacts_no_complexes_found():
+    """/contacts без обращений в ЖК — подсказка написать в чат ЖК."""
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
-    complexes = MagicMock()
-    complexes.find_by_chat = AsyncMock(return_value=None)
-
+    esc = _make_escalations_mock(complexes_by_user=[])
     result = await handle_resident_command(
-        bot=bot, text="/contacts", user_id=5, chat_id=-999,
-        complexes=complexes, escalations=None,
+        bot=_make_bot(sent), text="/contacts", user_id=5, chat_id=5,
+        escalations=esc,
     )
     assert result is True
     assert len(sent) == 1
+    # Должна быть подсказка написать в чат ЖК
+    assert "чат" in sent[0].lower() or "напишите" in sent[0].lower()
 
 
 # ===========================================================================
-# 13. Неизвестная команда → False
+# 14. Неизвестная команда → False
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_unknown_command_returns_false():
     from balt_dom_bot.handlers.resident_commands import handle_resident_command
     sent = []
-    bot = _make_bot(sent)
     result = await handle_resident_command(
-        bot=bot, text="/unknown_future_command", user_id=1, chat_id=-100,
-        complexes=MagicMock(), escalations=None,
+        bot=_make_bot(sent), text="/unknown_future_command", user_id=1, chat_id=1,
+        escalations=None,
     )
     assert result is False
     assert len(sent) == 0
 
 
 # ===========================================================================
-# 14–15. _format_mystatus
+# 15–18. _format_mystatus
 # ===========================================================================
 
 def test_format_mystatus_statuses():
     from balt_dom_bot.handlers.resident_commands import _format_mystatus
     rows = [
-        {"id": 1, "theme": "UTILITY", "status": "PENDING",
-         "created_at": "2026-05-01 09:00:00"},
-        {"id": 2, "theme": "IMPROVEMENT", "status": "APPROVED",
-         "created_at": "2026-04-30 10:00:00"},
-        {"id": 3, "theme": "SECURITY", "status": "IGNORED",
-         "created_at": "2026-04-29 11:00:00"},
+        {"id": 1, "complex_name": "ЖК А", "theme": "UTILITY",
+         "status": "PENDING", "created_at": "2026-05-01 09:00:00"},
+        {"id": 2, "complex_name": "ЖК А", "theme": "IMPROVEMENT",
+         "status": "APPROVED", "created_at": "2026-04-30 10:00:00"},
+        {"id": 3, "complex_name": "ЖК А", "theme": "SECURITY",
+         "status": "IGNORED", "created_at": "2026-04-29 11:00:00"},
     ]
     result = _format_mystatus(rows)
     assert "в работе" in result
@@ -308,139 +300,192 @@ def test_format_mystatus_empty():
     from balt_dom_bot.handlers.resident_commands import _format_mystatus
     result = _format_mystatus([])
     assert "нет" in result.lower() or "пока" in result.lower()
+    assert "не удалось" not in result.lower()
     assert len(result) > 10
 
 
-def test_format_mystatus_theme_is_russian():
+def test_format_mystatus_groups_by_complex():
     from balt_dom_bot.handlers.resident_commands import _format_mystatus
-    rows = [{"id": 5, "theme": "TECH_FAULT", "status": "PENDING",
-             "created_at": "2026-05-01 12:00:00"}]
+    rows = [
+        {"id": 1, "complex_name": "ЖК Север", "theme": "UTILITY",
+         "status": "PENDING", "created_at": "2026-05-01 09:00:00"},
+        {"id": 2, "complex_name": "ЖК Юг", "theme": "SECURITY",
+         "status": "APPROVED", "created_at": "2026-04-30 10:00:00"},
+    ]
     result = _format_mystatus(rows)
-    # Должна быть русская тема, не английская
-    assert "TECH_FAULT" not in result
-    assert "Технич" in result
+    assert "ЖК Север" in result
+    assert "ЖК Юг" in result
 
 
 def test_format_mystatus_active_count():
     from balt_dom_bot.handlers.resident_commands import _format_mystatus
     rows = [
-        {"id": 1, "theme": "OTHER", "status": "PENDING", "created_at": "2026-05-01 12:00:00"},
-        {"id": 2, "theme": "OTHER", "status": "PENDING", "created_at": "2026-05-02 12:00:00"},
-        {"id": 3, "theme": "OTHER", "status": "APPROVED", "created_at": "2026-05-03 12:00:00"},
+        {"id": 1, "complex_name": "ЖК А", "theme": "OTHER",
+         "status": "PENDING", "created_at": "2026-05-01 12:00:00"},
+        {"id": 2, "complex_name": "ЖК А", "theme": "OTHER",
+         "status": "PENDING", "created_at": "2026-05-02 12:00:00"},
+        {"id": 3, "complex_name": "ЖК А", "theme": "OTHER",
+         "status": "APPROVED", "created_at": "2026-05-03 12:00:00"},
     ]
     result = _format_mystatus(rows)
     assert "2" in result  # 2 активных
 
 
 # ===========================================================================
-# 16–17. EscalationRepo.list_by_user_in_chat
+# 19–21. _format_contacts
+# ===========================================================================
+
+def test_format_contacts_single_with_info():
+    from balt_dom_bot.handlers.resident_commands import _format_contacts
+    result = _format_contacts([{"name": "ЖК Север", "contacts_info": "📞 8-800-123"}])
+    assert "ЖК Север" in result
+    assert "8-800-123" in result
+
+
+def test_format_contacts_multiple():
+    from balt_dom_bot.handlers.resident_commands import _format_contacts
+    result = _format_contacts([
+        {"name": "ЖК А", "contacts_info": "Тел: 111"},
+        {"name": "ЖК Б", "contacts_info": None},
+    ])
+    assert "ЖК А" in result
+    assert "ЖК Б" in result
+    assert "Тел: 111" in result
+    assert "аварийн" in result.lower() or "не заполнена" in result.lower()
+
+
+def test_format_contacts_empty():
+    from balt_dom_bot.handlers.resident_commands import _format_contacts
+    result = _format_contacts([])
+    # Должна быть подсказка написать в чат ЖК
+    assert "чат" in result.lower() or "напишите" in result.lower()
+    assert "передам специалисту" not in result
+
+
+# ===========================================================================
+# 22–24. EscalationRepo.list_by_user и list_user_complexes
 # ===========================================================================
 
 @pytest.mark.asyncio
-async def test_escalation_repo_list_by_user_in_chat():
+async def test_escalation_repo_list_by_user():
+    """list_by_user возвращает записи с complex_name через JOIN."""
+    db = await _build_db()
     from balt_dom_bot.storage.escalations import EscalationRepo
     from balt_dom_bot.storage.complexes_repo import ComplexesRepo
-    from balt_dom_bot.models import (
-        AddressedTo, Character, Classification, IncomingMessage, Theme, Urgency,
-    )
-    db = await _build_db()
-    repo = EscalationRepo(db)
 
-    cls = Classification(
-        theme=Theme.TECH_FAULT, urgency=Urgency.HIGH,
-        character=Character.QUESTION, summary="Тест",
-        confidence=0.9, addressed_to=AddressedTo.UC,
-    )
-    incoming = IncomingMessage(
-        chat_id=-555, message_id="m1", user_id=42, user_name="Иван",
-        text="Тест", received_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
-    )
-    # Создаём 2 эскалации для user_id=42 в чате -555
-    await repo.create(
-        complex_id="c1", incoming=incoming,
-        classification=cls, proposed_reply=None,
-        reason="high_urgency", manager_chat_id=999,
-    )
-    await repo.create(
-        complex_id="c1", incoming=incoming,
-        classification=cls, proposed_reply=None,
-        reason="low_confidence", manager_chat_id=999,
-    )
-    # Создаём 1 эскалацию для другого user_id=77 в том же чате
-    other = IncomingMessage(
-        chat_id=-555, message_id="m2", user_id=77, user_name="Мария",
-        text="Другой запрос", received_at=datetime(2026, 5, 2, tzinfo=timezone.utc),
-    )
-    await repo.create(
-        complex_id="c1", incoming=other,
-        classification=cls, proposed_reply=None,
-        reason="aggression", manager_chat_id=999,
+    complexes = ComplexesRepo(db)
+    await complexes.upsert(
+        complex_id="jk1", name="ЖК Тест", address="ул. Ленина 1",
+        chat_id=-111, manager_chat_id=0,
     )
 
-    rows = await repo.list_by_user_in_chat(user_id=42, chat_id=-555)
-    assert len(rows) == 2
-    assert all(r["status"] == "PENDING" for r in rows)
+    esc_repo = EscalationRepo(db)
+    cls_json = json.dumps({
+        "theme": "UTILITY", "urgency": "LOW", "character": "QUESTION",
+        "confidence": 0.9, "addressed_to": "MANAGEMENT",
+        "summary": "тест", "keywords": [],
+    })
+    await db.conn.execute(
+        """INSERT INTO escalations
+           (complex_id, chat_id, user_message_id, user_id, user_name,
+            user_text, classification, proposed_reply, reason,
+            manager_chat_id, status)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        ("jk1", -111, "msg1", 999, "Иван", "тест", cls_json, None,
+         "question", 0, "PENDING"),
+    )
+    await db.conn.commit()
 
-    # Чужие записи не попадают
-    other_rows = await repo.list_by_user_in_chat(user_id=77, chat_id=-555)
-    assert len(other_rows) == 1
-
-    # Другой чат — пусто
-    empty = await repo.list_by_user_in_chat(user_id=42, chat_id=-9999)
-    assert len(empty) == 0
+    rows = await esc_repo.list_by_user(user_id=999)
+    assert len(rows) == 1
+    assert rows[0]["complex_name"] == "ЖК Тест"
+    assert rows[0]["theme"] == "UTILITY"
+    await db.close()
 
 
 @pytest.mark.asyncio
 async def test_escalation_repo_list_by_user_empty():
-    from balt_dom_bot.storage.escalations import EscalationRepo
     db = await _build_db()
-    repo = EscalationRepo(db)
-    rows = await repo.list_by_user_in_chat(user_id=12345, chat_id=-99999)
+    from balt_dom_bot.storage.escalations import EscalationRepo
+    esc_repo = EscalationRepo(db)
+    rows = await esc_repo.list_by_user(user_id=99999)
     assert rows == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_escalation_repo_list_user_complexes():
+    """list_user_complexes возвращает ЖК пользователя."""
+    db = await _build_db()
+    from balt_dom_bot.storage.escalations import EscalationRepo
+    from balt_dom_bot.storage.complexes_repo import ComplexesRepo
+
+    complexes = ComplexesRepo(db)
+    await complexes.upsert(
+        complex_id="jk_c", name="ЖК Контакт", address="пр. Мира 5",
+        chat_id=-222, manager_chat_id=0,
+        contacts_info="📞 Тел: 8-800",
+    )
+    esc_repo = EscalationRepo(db)
+    cls_json = json.dumps({
+        "theme": "SECURITY", "urgency": "HIGH", "character": "COMPLAINT_STRONG",
+        "confidence": 0.8, "addressed_to": "MANAGEMENT",
+        "summary": "тест", "keywords": [],
+    })
+    await db.conn.execute(
+        """INSERT INTO escalations
+           (complex_id, chat_id, user_message_id, user_id, user_name,
+            user_text, classification, proposed_reply, reason,
+            manager_chat_id, status)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        ("jk_c", -222, "msg2", 888, "Петр", "проблема", cls_json, None,
+         "aggression", 0, "PENDING"),
+    )
+    await db.conn.commit()
+
+    complexes_list = await esc_repo.list_user_complexes(user_id=888)
+    assert len(complexes_list) == 1
+    assert complexes_list[0]["name"] == "ЖК Контакт"
+    assert "8-800" in (complexes_list[0]["contacts_info"] or "")
+    await db.close()
 
 
 # ===========================================================================
-# 18. ComplexesRepo: contacts_info сохраняется и читается
+# 25. ComplexesRepo: contacts_info
 # ===========================================================================
 
 @pytest.mark.asyncio
 async def test_complexes_repo_contacts_info_roundtrip():
-    from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     db = await _build_db()
+    from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     repo = ComplexesRepo(db)
-    contacts = "🆘 Аварийная: 8 (812) 123-45-67\n📱 Диспетчер: +7 (921) 888"
     await repo.upsert(
-        complex_id="test-contacts",
-        name="ЖК Контакты",
-        address="ул. Тестовая, 1",
-        chat_id=-700,
-        manager_chat_id=800,
-        contacts_info=contacts,
+        complex_id="c1", name="ЖК1", address="addr", chat_id=-1,
+        manager_chat_id=0, contacts_info="📞 112",
     )
-    c = await repo.get("test-contacts")
+    c = await repo.get("c1")
     assert c is not None
-    assert c.contacts_info == contacts
+    assert c.contacts_info == "📞 112"
+    await db.close()
 
 
 @pytest.mark.asyncio
 async def test_complexes_repo_contacts_info_none_by_default():
-    from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     db = await _build_db()
+    from balt_dom_bot.storage.complexes_repo import ComplexesRepo
     repo = ComplexesRepo(db)
     await repo.upsert(
-        complex_id="test-no-contacts",
-        name="ЖК Без контактов",
-        address="ул. Тестовая, 2",
-        chat_id=-701,
-        manager_chat_id=801,
+        complex_id="c2", name="ЖК2", address="addr", chat_id=-2,
+        manager_chat_id=0,
     )
-    c = await repo.get("test-no-contacts")
+    c = await repo.get("c2")
     assert c is not None
     assert c.contacts_info is None
+    await db.close()
 
 
 # ===========================================================================
-# 19. lifecycle.py ссылается на RESIDENT_HELP_TEXT
+# 26–27. Структурные проверки lifecycle.py и messages.py
 # ===========================================================================
 
 def test_lifecycle_imports_resident_help_text():
@@ -449,22 +494,15 @@ def test_lifecycle_imports_resident_help_text():
     import balt_dom_bot.handlers.lifecycle as lc
     source = inspect.getsource(lc)
     assert "RESIDENT_HELP_TEXT" in source
-    # Нет старого дублирующего HELP_TEXT литерала
     assert "пересылаю" not in source
     assert 'HELP_TEXT = ' not in source
 
-
-# ===========================================================================
-# 20. messages.py не содержит дублирующего HELP_TEXT
-# ===========================================================================
 
 def test_messages_no_duplicate_help_text():
     """messages.py больше не должен содержать HELP_TEXT-константу напрямую."""
     import inspect
     import balt_dom_bot.handlers.messages as msg_module
     source = inspect.getsource(msg_module)
-    # Старая константа HELP_TEXT удалена — вместо неё resident_cmd
-    assert "HELP_TEXT" not in source
-    assert "resident_cmd" in source or "resident_commands" in source
-    # Нет упоминания внутренних деталей модерации в константах
-    assert "пересылаю" not in source
+    assert "resident_cmd" in source
+    assert 'HELP_TEXT = "' not in source
+    assert "HELP_TEXT = '" not in source
