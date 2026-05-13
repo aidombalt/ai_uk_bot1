@@ -1,18 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2 class="mb-0">🗨 Болтание</h2>
+  <h2 class="mb-0">💬 Диалог с жильцом</h2>
   <span class="text-muted small">
     Жильцы из этого списка получают мини-диалог с ботом (с памятью контекста).
   </span>
 </div>
 
 <div class="alert alert-info small">
-  <b>Как это работает:</b><br>
+  <b>Как работает диалоговый режим:</b><br>
   • Бот ведёт активный разговор: слушает, уточняет детали, не спорит, не обещает сроков.<br>
-  • После 3-5 реплик автоматически фиксирует обращение и передаёт специалистам УК.<br>
+  • После 3–5 реплик автоматически фиксирует обращение и передаёт специалистам УК.<br>
   • Spam, мат и провокации к УК продолжают модерироваться обычным образом.<br>
-  • Перед добавлением в список — убедитесь что в форме ЖК включена галочка <b>«Включить режим Болтания»</b>.
+  • <b>Обязательное условие:</b> в настройках ЖК должна быть включена галочка
+    <b>«Включить диалоговый режим для этого ЖК»</b>.
+    Только тогда жильцы из этого списка получат диалоговый режим.
+    Если галочка не стоит — все жильцы, включая добавленных сюда, получат стандартный автоответ.
 </div>
 
 <div class="card mb-4">
@@ -25,7 +28,7 @@
           <option value="">— выберите ЖК —</option>
           {% for c in complexes %}
             <option value="{{ c.chat_id }}">
-              {{ c.name }} ({{ c.chat_id }}){% if not c.chat_mode_enabled %} ⚠️ болтание выключено{% endif %}
+              {{ c.name }} ({{ c.chat_id }}){% if not c.chat_mode_enabled %} ⚠️ диалог. режим выключен{% endif %}
             </option>
           {% endfor %}
         </select>
@@ -50,7 +53,7 @@
   </div>
 </div>
 
-<h5>Активные «болтуны» ({{ entries|length }})</h5>
+<h5>Активные участники диалогового режима ({{ entries|length }})</h5>
 {% if entries %}
 <div class="table-responsive">
   <table class="table table-sm table-striped align-middle">
@@ -72,7 +75,7 @@
           {% if complex %}
             {{ complex.name }}
             {% if not complex.chat_mode_enabled %}
-              <br><small class="text-warning">⚠️ болтание для ЖК выключено</small>
+              <br><small class="text-warning">⚠️ диалоговый режим для ЖК выключен</small>
             {% endif %}
           {% else %}
             <code class="small">chat: {{ e.chat_id }}</code>
@@ -90,7 +93,7 @@
           </form>
           <form method="post" action="/chat_whitelist/{{ e.chat_id }}/{{ e.user_id }}/remove" class="d-inline"
                 onsubmit="return confirm('Убрать жильца из списка болтания? История переписки также очистится.');">
-            <button class="btn btn-sm btn-outline-danger" type="submit">🗑 Убрать</button>
+            <button class="btn btn-sm btn-outline-danger" type="submit">🗑 Удалить</button>
           </form>
         </td>
       </tr>
@@ -99,6 +102,6 @@
   </table>
 </div>
 {% else %}
-<p class="text-muted">Пока никого. Добавьте жильца через форму выше — например, когда получите уведомление о превышении квоты.</p>
+<p class="text-muted">Пока никого. Добавьте жильца через форму выше — например, когда получите уведомление о превышении квоты. Не забудьте также включить диалоговый режим в настройках ЖК.</p>
 {% endif %}
 {% endblock %}

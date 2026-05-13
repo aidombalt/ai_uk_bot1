@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Редактировать {{ c.name }} — Балтийский Дом{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3">
+  <a href="/complexes" class="btn btn-sm btn-outline-secondary">← К списку ЖК</a>
+  <h4 class="mb-0">✏ Редактировать ЖК: {{ c.name }}</h4>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="/complexes/upsert" class="row g-3">
+
+      {# ID — первичный ключ, нельзя менять. Показываем, но отправляем скрытым полем. #}
+      <div class="col-md-3">
+        <label class="form-label">ID <span class="text-muted">(неизменяемый)</span></label>
+        <input class="form-control bg-light" type="text" value="{{ c.id }}" readonly>
+        <input type="hidden" name="complex_id" value="{{ c.id }}">
+        <small class="text-muted">короткий, латиница</small>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Название</label>
+        <input class="form-control" name="name" value="{{ c.name }}" required>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">Адрес</label>
+        <input class="form-control" name="address" value="{{ c.address }}" required>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-6">
+        <label class="form-label">chat_id чата ЖК</label>
+        <input class="form-control" type="number" name="chat_id" value="{{ c.chat_id }}" required>
+        <small class="text-muted">ID группового чата с жильцами (число со знаком минус)</small>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">user_id управляющего <span class="text-muted">(опционально)</span></label>
+        <input class="form-control" type="number" name="manager_user_id"
+               value="{{ c.manager_user_id if c.manager_user_id else '' }}" placeholder="141525691">
+        <small class="text-muted">Если указать — бот игнорирует сообщения управляющего в чате ЖК.</small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-12">
+        <h6 class="text-muted small text-uppercase mt-2">Каналы уведомлений управляющего</h6>
+        <div class="alert alert-warning small py-2 px-3 mb-2">
+          ⚠️ Заполните <b>хотя бы одно</b> из полей ниже — иначе боту некуда пересылать обращения жильцов.
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">📌 chat_id личного диалога управляющего</label>
+        <input class="form-control" type="number" name="manager_chat_id"
+               value="{{ c.manager_chat_id if c.manager_chat_id else '' }}" placeholder="118109162">
+        <small class="text-muted">
+          ⚠️ Это <b>chat_id личного диалога</b> бота с управляющим, <b>не user_id</b>!
+        </small>
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="escalate_to_manager" id="etm"
+                 {% if c.escalate_to_manager %}checked{% endif %}>
+          <label class="form-check-label" for="etm">
+            <b>Эскалации</b> в личку управляющему
+          </label>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">📋 chat_id чата «Обращения»</label>
+        <input class="form-control" type="number" name="escalation_chat_id"
+               value="{{ c.escalation_chat_id if c.escalation_chat_id else '' }}" placeholder="-987654321">
+        <small class="text-muted">
+          Отдельный чат для аудита: бот туда дублирует свою работу.
+        </small>
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="escalate_to_chat" id="etc"
+                 {% if c.escalate_to_chat %}checked{% endif %}>
+          <label class="form-check-label" for="etc">
+            <b>Лог всех обращений</b> в чат «Обращения»
+          </label>
+        </div>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-md-12">
+        <h6 class="text-muted small text-uppercase mt-2">Авто-модерация <span class="badge bg-warning text-dark">опасно</span></h6>
+        <small class="text-muted">Требует у бота <b>прав администратора</b> в чате ЖК (удаление сообщений + управление участниками).</small>
+      </div>
+
+      <div class="col-md-6">
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="checkbox" name="auto_delete_aggression" id="ada"
+                 {% if c.auto_delete_aggression %}checked{% endif %}>
+          <label class="form-check-label" for="ada">
+            <b>Удалять сообщения с матом и оскорблениями</b>
+          </label>
+          <div class="text-muted small">
+            При классификации как <code>AGGRESSION</code> бот удаляет сообщение. Эскалация управляющему всё равно происходит.
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Бан после N страйков агрессии/спама</label>
+        <input class="form-control" type="number" name="strikes_for_ban" min="1" max="10"
+               value="{{ c.strikes_for_ban }}">
+        <small class="text-muted">По умолчанию 3.</small>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Бан после N страйков троллинга</label>
+        <input class="form-control" type="number" name="trolling_strikes_for_ban" min="2" max="20"
+               value="{{ c.trolling_strikes_for_ban }}">
+        <small class="text-muted">По умолчанию 6.</small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">Защита от чрезмерной активности</h6>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Дневная квота ответов (на 1 жильца)</label>
+        <input class="form-control" type="number" name="daily_replies_limit" min="1" max="50"
+               value="{{ c.daily_replies_limit }}">
+        <small class="text-muted">По умолчанию 5. После исчерпания — тишина + 1 уведомление управляющему.</small>
+      </div>
+
+      <div class="col-md-6">
+        <label class="form-label">Окно квоты, часов</label>
+        <input class="form-control" type="number" name="daily_window_hours" min="1" max="24"
+               value="{{ c.daily_window_hours }}">
+        <small class="text-muted">По умолчанию 6 часов.</small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">💬 Диалоговый режим с жильцом</h6>
+        <small class="text-muted">
+          Для тревожных или эмоциональных жильцов: бот ведёт мини-диалог с памятью контекста.
+          Работает <b>только в связке</b>: галочка ниже (мастер-переключатель для ЖК) <b>И</b>
+          жилец добавлен в белый список на странице
+          <a href="/chat_whitelist">💬 Диалог с жильцом</a>.
+          Без обоих условий — стандартный автоответ.
+        </small>
+      </div>
+
+      <div class="col-12">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="chat_mode_enabled" id="chat_mode_enabled"
+                 {% if c.chat_mode_enabled %}checked{% endif %}>
+          <label class="form-check-label" for="chat_mode_enabled">
+            💬 Включить диалоговый режим для этого ЖК
+          </label>
+          <div class="small text-muted">
+            Без галочки — даже жильцы из белого списка получат стандартный автоответ.
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+
+      <div class="col-12">
+        <h6 class="text-muted small text-uppercase mt-2">Режим работы</h6>
+        <small class="text-muted">Меняет ТОЛЬКО реакцию на обращения жильцов. Модерация и эскалации работают независимо.</small>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Режим ответов жильцам</label>
+        <select class="form-select" name="reply_mode" id="reply_mode_sel"
+                onchange="document.getElementById('hm').style.display = this.value === 'holiday' ? '' : 'none'">
+          <option value="normal" {% if c.reply_mode == 'normal' %}selected{% endif %}>🟢 Обычный — отвечать FAQ + ИИ</option>
+          <option value="holiday" {% if c.reply_mode == 'holiday' %}selected{% endif %}>🌴 Праздничный — шаблонный автоответ</option>
+          <option value="off" {% if c.reply_mode == 'off' %}selected{% endif %}>⏸ Выключен — молча принимать только аварии</option>
+        </select>
+      </div>
+      <div class="col-md-6" id="hm" style="display: {% if c.reply_mode == 'holiday' %}block{% else %}none{% endif %}">
+        <label class="form-label">Текст автоответа (режим Праздничный)</label>
+        <textarea class="form-control" name="holiday_message" rows="3"
+                  placeholder="Если оставить пустым — будет использован дефолтный текст.">{{ c.holiday_message or '' }}</textarea>
+        <small class="text-muted">Например: «Сейчас новогодние праздники, ответим 9 января...»</small>
+      </div>
+
+      <div class="col-12"><hr class="my-1"></div>
+      <div class="col-md-3">
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" name="active" id="active"
+                 {% if c.active %}checked{% endif %}>
+          <label class="form-check-label" for="active"><b>Активен</b></label>
+          <div class="text-muted small">Бот реагирует на сообщения в чате ЖК</div>
+        </div>
+      </div>
+      <div class="col-md-9 d-flex align-items-end">
+        <button class="btn btn-primary w-100">Сохранить изменения</button>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}

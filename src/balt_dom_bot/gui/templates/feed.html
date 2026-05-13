@@ -26,15 +26,15 @@
           </div>
           {% if it.cls %}
             <div>
-              <span class="badge badge-theme">{{ it.cls.theme }}</span>
-              <span class="badge bg-warning text-dark">{{ it.cls.urgency }}</span>
-              <span class="badge bg-info text-dark">{{ it.cls.character }}</span>
+              <span class="badge badge-theme" title="{{ it.cls.theme }}">{{ it.cls.theme | theme_ru }}</span>
+              <span class="badge bg-warning text-dark" title="{{ it.cls.urgency }}">{{ it.cls.urgency | urgency_ru }}</span>
+              <span class="badge bg-info text-dark" title="{{ it.cls.character }}">{{ it.cls.character | character_ru }}</span>
             </div>
           {% endif %}
         </div>
         <div class="mt-1">{{ it.user_text }}</div>
         {% if it.dec and it.dec.escalate %}
-          <div class="small text-warning mt-1">⚠️ Эскалация: {{ it.dec.escalation_reason }}</div>
+          <div class="small text-warning mt-1">⚠️ Эскалация: {{ it.dec.escalation_reason | reason_ru }}</div>
         {% endif %}
       </div>
     {% endfor %}

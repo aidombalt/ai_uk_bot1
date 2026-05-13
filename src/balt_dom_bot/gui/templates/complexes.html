@@ -139,9 +139,12 @@
       <div class="col-12"><hr class="my-1"></div>
 
       <div class="col-12">
-        <h6 class="text-muted small text-uppercase mt-2">🗨 Режим «Болтания»</h6>
+        <h6 class="text-muted small text-uppercase mt-2">💬 Диалоговый режим с жильцом</h6>
         <small class="text-muted">
-          Для тревожных или эмоциональных жильцов: бот ведёт мини-диалог с памятью контекста — слушает, уточняет, не спорит, не обещает. <b>НЕ заменяет</b> работу управляющего: после 3-5 реплик бот фиксирует обращение и передаёт. Применяется ТОЛЬКО к жильцам из whitelist (управляется на странице <a href="/chat_whitelist">🗨 Болтание</a>). Spam, мат и провокации к УК продолжают модерироваться нормально.
+          Для тревожных или эмоциональных жильцов: бот ведёт мини-диалог с памятью контекста — слушает, уточняет, не спорит, не обещает. <b>НЕ заменяет</b> работу управляющего: после 3–5 реплик бот фиксирует обращение и передаёт специалистам.
+          Работает <b>только в связке</b>: галочка ниже (мастер-переключатель для ЖК) <b>И</b> жилец добавлен в белый список на странице
+          <a href="/chat_whitelist">💬 Диалог с жильцом</a>.
+          Spam, мат и провокации к УК продолжают модерироваться нормально вне зависимости от этой настройки.
         </small>
       </div>
 
@@ -149,10 +152,11 @@
         <div class="form-check">
           <input class="form-check-input" type="checkbox" name="chat_mode_enabled" id="chat_mode_enabled">
           <label class="form-check-label" for="chat_mode_enabled">
-            🗨 Включить режим «Болтания» для этого ЖК
+            💬 Включить диалоговый режим для этого ЖК
           </label>
           <div class="small text-muted">
-            Без галочки — даже добавленные в whitelist жильцы получат стандартный автоответ. Фича работает только когда галочка стоит И жилец в whitelist.
+            Без галочки — даже жильцы из белого списка получат стандартный автоответ.
+            Обе настройки должны быть активны одновременно.
           </div>
         </div>
       </div>
@@ -226,16 +230,19 @@
             {% if c.escalate_to_manager %}<span class="badge bg-info text-dark" title="Эскалации в личку управляющего">📌 личка</span>{% endif %}
             {% if c.escalate_to_chat %}<span class="badge bg-secondary" title="Все обращения в чат">📋 лог</span>{% endif %}
             {% if c.auto_delete_aggression %}<span class="badge bg-warning text-dark" title="Авто-удаление + бан: агрессия после {{ c.strikes_for_ban }}, троллинг после {{ c.trolling_strikes_for_ban or 6 }}">🛡 мод. ({{ c.strikes_for_ban }}/{{ c.trolling_strikes_for_ban or 6 }})</span>{% endif %}
-            {% if c.chat_mode_enabled %}<span class="badge bg-info text-dark" title="Включён режим «Болтания» для жильцов из whitelist">🗨 болтание</span>{% endif %}
+            {% if c.chat_mode_enabled %}<span class="badge bg-info text-dark" title="Диалоговый режим включён для жильцов из белого списка">💬 диалог</span>{% endif %}
             <span class="badge bg-light text-muted" title="Дневная квота ответов">📊 {{ c.daily_replies_limit or 5 }}/{{ c.daily_window_hours or 6 }}ч</span>
-            {% if c.reply_mode == 'holiday' %}<span class="badge bg-info" title="Режим праздничного автоответа">🌴 holiday</span>
-            {% elif c.reply_mode == 'off' %}<span class="badge bg-secondary" title="Бот не отвечает жильцам, только эскалирует важное">⏸ off</span>{% endif %}
+            {% if c.reply_mode == 'holiday' %}<span class="badge bg-info" title="Режим праздничного автоответа">🌴 Праздничный</span>
+            {% elif c.reply_mode == 'off' %}<span class="badge bg-secondary" title="Бот не отвечает жильцам, только эскалирует важное">⏸ Выключен</span>{% endif %}
             {% if not c.escalate_to_manager and not c.escalate_to_chat and not c.auto_delete_aggression %}<span class="text-muted small">только GUI</span>{% endif %}
           </td>
           <td>{% if c.active %}<span class="badge bg-success">да</span>{% else %}<span class="badge bg-secondary">нет</span>{% endif %}</td>
-          <td>
-            <form method="post" action="/complexes/{{ c.id }}/delete" onsubmit="return confirm('Удалить ЖК {{ c.id }}?');">
-              <button class="btn btn-sm btn-outline-danger">Удалить</button>
+          <td class="text-nowrap">
+            <a href="/complexes/{{ c.id }}/edit" class="btn btn-sm btn-outline-primary me-1">✏ Изменить</a>
+            <form method="post" action="/complexes/{{ c.id }}/delete"
+                  onsubmit="return confirm('Удалить ЖК {{ c.id }}? Это действие необратимо.');"
+                  class="d-inline">
+              <button class="btn btn-sm btn-outline-danger">🗑 Удалить</button>
             </form>
           </td>
         </tr>

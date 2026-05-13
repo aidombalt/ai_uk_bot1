@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from balt_dom_bot.l10n import CHARACTER_RU, REASON_RU, THEME_RU, URGENCY_RU
 from balt_dom_bot.log import get_logger
 from balt_dom_bot.models import Classification, ComplexInfo, IncomingMessage, PipelineDecision
 from balt_dom_bot.storage.escalations import EscalationRepo, EscalationStatus
@@ -23,16 +24,7 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-REASON_LABEL: dict[str, str] = {
-    "aggression": "🚫 агрессия / оскорбления",
-    "provocation": "⚠️ провокация",
-    "high_urgency": "🆘 высокая срочность",
-    "always_escalate_theme": "🏛 особая тема",
-    "low_confidence": "❓ низкая уверенность классификатора",
-    "llm_error": "🛠 ошибка LLM",
-    "after_hours": "🌙 вне рабочих часов",
-    "fragment_troll": "🧩 дробный мат / троллинг частями",
-}
+REASON_LABEL = REASON_RU
 
 
 class MessageSender(Protocol):
@@ -128,7 +120,9 @@ def render_card(
     return (
         f"📩 Обращение #{esc_id} | {complex_info.name} | {complex_info.address}\n"
         f"👤 Жилец: {name}\n"
-        f"🏷 {cls.theme.value}  ⚡ {cls.urgency.value}  💬 {cls.character.value}  "
+        f"🏷 {THEME_RU.get(cls.theme.value, cls.theme.value)}  "
+        f"⚡ {URGENCY_RU.get(cls.urgency.value, cls.urgency.value)}  "
+        f"💬 {CHARACTER_RU.get(cls.character.value, cls.character.value)}  "
         f"(уверенность: {cls.confidence:.2f})\n"
         f"🎯 Причина: {reason}\n"
         f"📝 Суть: {cls.summary}\n"

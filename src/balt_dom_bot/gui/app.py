@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import date
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import openpyxl
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
+from balt_dom_bot.l10n import CHARACTER_RU, REASON_RU, THEME_RU, URGENCY_RU
 from balt_dom_bot.gui.auth import (
     AuthConfig,
     clear_cookie,
@@ -53,9 +59,54 @@ class GuiDeps:
     quota: Any = None            # QuotaManager
 
 
+def _make_excel_style():
+    """Общие стили для Excel-выгрузки."""
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    header_font = Font(bold=True, color="FFFFFF", name="Calibri", size=11)
+    even_fill = PatternFill("solid", fgColor="DCE6F1")
+    odd_fill = PatternFill("solid", fgColor="FFFFFF")
+    thin = Side(style="thin", color="BFBFBF")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    wrap = Alignment(vertical="center", wrap_text=True)
+    return header_fill, header_font, even_fill, odd_fill, border, center, wrap
+
+
+def _excel_header_row(ws, headers: list[str], style_tuple) -> None:
+    header_fill, header_font, *_ = style_tuple
+    _, _, _, _, border, center, _ = style_tuple
+    for col_idx, title in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=title)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = border
+        cell.alignment = center
+
+
+def _excel_data_row(ws, row_idx: int, values: list, style_tuple) -> None:
+    _, _, even_fill, odd_fill, border, _, wrap = style_tuple
+    fill = even_fill if row_idx % 2 == 0 else odd_fill
+    for col_idx, val in enumerate(values, start=1):
+        cell = ws.cell(row=row_idx, column=col_idx, value=val)
+        cell.fill = fill
+        cell.border = border
+        cell.alignment = wrap
+
+
+def _excel_autowidth(ws) -> None:
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=8)
+        ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 50)
+
+
 def build_gui_app(deps: GuiDeps) -> FastAPI:
     templates_dir = Path(__file__).parent / "templates"
     templates = Jinja2Templates(directory=str(templates_dir))
+    # Локализующие функции — доступны во всех шаблонах как фильтры.
+    templates.env.filters["theme_ru"] = lambda v: THEME_RU.get(str(v), str(v))
+    templates.env.filters["urgency_ru"] = lambda v: URGENCY_RU.get(str(v), str(v))
+    templates.env.filters["character_ru"] = lambda v: CHARACTER_RU.get(str(v), str(v))
+    templates.env.filters["reason_ru"] = lambda v: REASON_RU.get(str(v), str(v))
 
     app = FastAPI(title="Балтийский Дом — AI-бот")
 
@@ -356,6 +407,161 @@ def build_gui_app(deps: GuiDeps) -> FastAPI:
                 "active": "stats"},
         )
 
+    @app.get("/stats/export")
+    async def stats_export(user: UserRow = Depends(_user_or_redirect)):
+        """Выгрузка статистики в Excel (XLSX) с форматированием."""
+        # --- те же запросы, что и /stats, + детальный лог сообщений -----------
+        cur = await deps.db_conn.execute(
+            """
+            SELECT json_extract(classification, '$.theme') AS theme, COUNT(*) AS n
+            FROM messages
+            WHERE classification IS NOT NULL
+              AND received_at >= datetime('now', '-30 days')
+            GROUP BY theme ORDER BY n DESC
+            """
+        )
+        by_theme = [(r["theme"], r["n"]) for r in await cur.fetchall()]
+
+        cur = await deps.db_conn.execute(
+            """
+            SELECT complex_id, COUNT(*) AS n
+            FROM messages
+            WHERE received_at >= datetime('now', '-30 days')
+            GROUP BY complex_id ORDER BY n DESC
+            """
+        )
+        by_complex = [(r["complex_id"] or "—", r["n"]) for r in await cur.fetchall()]
+
+        cur = await deps.db_conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN json_extract(decision, '$.escalate') = 1 THEN 1 ELSE 0 END) AS escalated,
+              SUM(CASE WHEN json_extract(decision, '$.escalate') = 0 THEN 1 ELSE 0 END) AS auto
+            FROM messages
+            WHERE decision IS NOT NULL
+              AND received_at >= datetime('now', '-30 days')
+            """
+        )
+        row = await cur.fetchone()
+        auto_cnt = (row["auto"] or 0) if row else 0
+        escalated_cnt = (row["escalated"] or 0) if row else 0
+
+        cur = await deps.db_conn.execute(
+            "SELECT reason, COUNT(*) AS n FROM escalations GROUP BY reason ORDER BY n DESC"
+        )
+        by_reason = [(r["reason"], r["n"]) for r in await cur.fetchall()]
+
+        # Детальный лог: последние 500 сообщений с расшифровкой классификации.
+        cur = await deps.db_conn.execute(
+            """
+            SELECT m.received_at, m.complex_id, m.user_name,
+                   json_extract(m.classification, '$.theme') AS theme,
+                   json_extract(m.classification, '$.urgency') AS urgency,
+                   json_extract(m.classification, '$.character') AS character,
+                   json_extract(m.classification, '$.confidence') AS confidence,
+                   json_extract(m.decision, '$.escalate') AS escalated,
+                   json_extract(m.decision, '$.escalation_reason') AS esc_reason,
+                   m.user_text
+            FROM messages m
+            ORDER BY m.received_at DESC
+            LIMIT 500
+            """
+        )
+        messages = await cur.fetchall()
+
+        # --- Формируем книгу Excel -------------------------------------------
+        wb = openpyxl.Workbook()
+        style = _make_excel_style()
+
+        # Лист 1: Сводка
+        ws_summary = wb.active
+        ws_summary.title = "Сводка"
+        _excel_header_row(ws_summary, ["Показатель", "Значение"], style)
+        summary_data = [
+            ("Период отчёта", "Последние 30 дней"),
+            ("Дата выгрузки", date.today().strftime("%d.%m.%Y")),
+            ("Авто-ответов (всего)", auto_cnt),
+            ("Эскалаций (всего)", escalated_cnt),
+            ("Всего обработано", auto_cnt + escalated_cnt),
+            ("Доля эскалаций, %",
+             f"{escalated_cnt / (auto_cnt + escalated_cnt) * 100:.1f}%"
+             if (auto_cnt + escalated_cnt) > 0 else "0%"),
+        ]
+        for i, row_vals in enumerate(summary_data, start=2):
+            _excel_data_row(ws_summary, i, list(row_vals), style)
+        _excel_autowidth(ws_summary)
+        ws_summary.freeze_panes = "A2"
+
+        # Лист 2: По темам
+        ws_themes = wb.create_sheet("По темам")
+        _excel_header_row(ws_themes, ["Тема (англ.)", "Тема (рус.)", "Кол-во"], style)
+        for i, (theme, n) in enumerate(by_theme, start=2):
+            _excel_data_row(
+                ws_themes, i,
+                [theme, THEME_RU.get(theme or "", theme or "—"), n],
+                style,
+            )
+        _excel_autowidth(ws_themes)
+        ws_themes.freeze_panes = "A2"
+
+        # Лист 3: По ЖК
+        ws_complexes = wb.create_sheet("По ЖК")
+        _excel_header_row(ws_complexes, ["ID / Название ЖК", "Кол-во сообщений"], style)
+        for i, (cid, n) in enumerate(by_complex, start=2):
+            _excel_data_row(ws_complexes, i, [cid, n], style)
+        _excel_autowidth(ws_complexes)
+        ws_complexes.freeze_panes = "A2"
+
+        # Лист 4: Причины эскалаций
+        ws_reasons = wb.create_sheet("Причины эскалаций")
+        _excel_header_row(ws_reasons, ["Причина (системная)", "Причина (рус.)", "Кол-во"], style)
+        for i, (reason, n) in enumerate(by_reason, start=2):
+            _excel_data_row(
+                ws_reasons, i,
+                [reason, REASON_RU.get(reason or "", reason or "—"), n],
+                style,
+            )
+        _excel_autowidth(ws_reasons)
+        ws_reasons.freeze_panes = "A2"
+
+        # Лист 5: Детальный лог
+        ws_log = wb.create_sheet("Детальный лог")
+        _excel_header_row(ws_log, [
+            "Дата/время", "ЖК", "Жилец",
+            "Тема", "Срочность", "Характер", "Уверенность",
+            "Эскалация", "Причина эскалации", "Текст обращения",
+        ], style)
+        for i, msg in enumerate(messages, start=2):
+            theme_v = msg["theme"] or ""
+            urgency_v = msg["urgency"] or ""
+            char_v = msg["character"] or ""
+            reason_v = msg["esc_reason"] or ""
+            _excel_data_row(ws_log, i, [
+                msg["received_at"],
+                msg["complex_id"] or "—",
+                msg["user_name"] or "—",
+                THEME_RU.get(theme_v, theme_v) if theme_v else "—",
+                URGENCY_RU.get(urgency_v, urgency_v) if urgency_v else "—",
+                CHARACTER_RU.get(char_v, char_v) if char_v else "—",
+                f"{float(msg['confidence']):.2f}" if msg["confidence"] else "—",
+                "Да" if msg["escalated"] else "Нет",
+                REASON_RU.get(reason_v, reason_v) if reason_v else "—",
+                (msg["user_text"] or "")[:500],
+            ], style)
+        _excel_autowidth(ws_log)
+        ws_log.freeze_panes = "A2"
+
+        # --- Возвращаем файл --------------------------------------------------
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f"stats_{date.today().strftime('%Y%m%d')}.xlsx"
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     # ----- Конфиг ЖК ------------------------------------------------------
 
     @app.get("/complexes", response_class=HTMLResponse)
@@ -376,7 +582,7 @@ def build_gui_app(deps: GuiDeps) -> FastAPI:
         manager_chat_id: str = Form(default=""),
         manager_user_id: str = Form(default=""),
         escalation_chat_id: str = Form(default=""),
-        active: str = Form(default="on"),
+        active: str = Form(default=""),
         escalate_to_manager: str = Form(default=""),
         escalate_to_chat: str = Form(default=""),
         auto_delete_aggression: str = Form(default=""),
@@ -450,6 +656,21 @@ def build_gui_app(deps: GuiDeps) -> FastAPI:
         await deps.global_settings.set_bot_enabled(not cur)
         return RedirectResponse(
             "/escalations", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    @app.get("/complexes/{complex_id}/edit", response_class=HTMLResponse)
+    async def complexes_edit_page(
+        complex_id: str,
+        request: Request,
+        user: UserRow = Depends(_user_or_redirect),
+    ):
+        c = await deps.complexes.get(complex_id)
+        if c is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "ЖК не найден")
+        return templates.TemplateResponse(
+            request=request,
+            name="complex_edit.html",
+            context={"user": user, "c": c, "active": "complexes"},
         )
 
     @app.post("/complexes/{complex_id}/delete")

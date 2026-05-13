@@ -35,7 +35,7 @@
         <li class="nav-item"><a class="nav-link {% if active=='complexes' %}active{% endif %}" href="/complexes">ЖК</a></li>
         <li class="nav-item"><a class="nav-link {% if active=='prompts' %}active{% endif %}" href="/prompts">Промты</a></li>
         <li class="nav-item"><a class="nav-link {% if active=='bans' %}active{% endif %}" href="/bans">🚫 Баны</a></li>
-        <li class="nav-item"><a class="nav-link {% if active=='chat_whitelist' %}active{% endif %}" href="/chat_whitelist">🗨 Болтание</a></li>
+        <li class="nav-item"><a class="nav-link {% if active=='chat_whitelist' %}active{% endif %}" href="/chat_whitelist">💬 Диалог</a></li>
       </ul>
       <span class="navbar-text me-3">{{ user.display_name or user.login }} ({{ user.role }})</span>
       {% set bot_enabled = request.state.bot_enabled if request.state and request.state.bot_enabled is defined else true %}
