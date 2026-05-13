@@ -244,8 +244,9 @@ async def test_contacts_without_custom_info():
     )
     assert result is True
     assert "ЖК Балтик" in sent[0]
-    # Содержит приглашение написать в чат
-    assert "чат" in sent[0].lower() or "обращайтесь" in sent[0].lower()
+    # Честный fallback: не обещает «передам специалисту», упоминает аварийную службу
+    assert "передам специалисту" not in sent[0]
+    assert "аварийн" in sent[0].lower() or "не заполнена" in sent[0].lower()
 
 
 @pytest.mark.asyncio
